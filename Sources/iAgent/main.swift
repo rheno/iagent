@@ -26,6 +26,8 @@ OPTIONS
   --no-thinking         don't request adaptive thinking (Anthropic)
   --yolo                auto-approve tool calls (sending messages still always asks)
   --no-apple            disable the Apple ecosystem tools (smaller tool list for small models)
+  --local               local-only: nothing leaves this Mac (model on localhost only, network tools off,
+                        bash sandboxed without network). Also "localOnly": true or IAGENT_LOCAL_ONLY=1
   --run-tool <name> <json>  run one tool directly without a model (debugging), e.g.
                         --run-tool apple_devices '{}'
   -C, --cwd <dir>       working directory (default: current)
@@ -94,6 +96,7 @@ do {
         case "--no-thinking": flags.thinking = false; cliSet.insert("thinking")
         case "--yolo", "--dangerously-skip-permissions": flags.autoApprove = true
         case "--no-apple": flags.appleTools = false; cliSet.insert("appleTools")
+        case "--local": flags.localOnly = true; cliSet.insert("localOnly")
         case "--run-tool": directTool = (try value(a), try value(a))
         case "-C", "--cwd": cwdPath = (try value(a) as NSString).expandingTildeInPath
         default:
@@ -117,6 +120,7 @@ do {
     if cliSet.contains("effort") { config.effort = flags.effort }
     if cliSet.contains("thinking") { config.thinking = false }
     if cliSet.contains("appleTools") { config.appleTools = false }
+    if cliSet.contains("localOnly") { config.localOnly = true }
     config.autoApprove = flags.autoApprove
 } catch {
     emitError("error: \(error)")
@@ -131,8 +135,11 @@ guard FileManager.default.fileExists(atPath: cwdPath, isDirectory: &isDir), isDi
 
 let permissions = Permissions(autoApprove: config.autoApprove)
 // Resolve symlinks (e.g. /tmp, /var) so paths from the file enumerator share the cwd prefix.
-let ctx = ToolContext(cwd: realPath(URL(fileURLWithPath: cwdPath).standardizedFileURL), permissions: permissions)
-let tools = Toolbox.all(apple: config.appleTools)
+var ctx = ToolContext(cwd: realPath(URL(fileURLWithPath: cwdPath).standardizedFileURL), permissions: permissions)
+ctx.localOnly = config.localOnly
+let tools = Toolbox.all(apple: config.appleTools, localOnly: config.localOnly)
+// Credential-looking env values (API keys, tokens) are masked wherever they show up in what the model receives.
+Redact.registerEnvironment()
 
 if let direct = directTool {
     let call = ToolCall(id: "direct", name: direct.name, arguments: direct.args)
@@ -190,6 +197,9 @@ if let prompt = oneShot {
 
 emit(Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.label) · \(provider.model)") + "\n")
 emit(Style.dim("  cwd: \(ctx.cwd.path)  — /help for commands") + "\n")
+if config.localOnly {
+    emit(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network") + "\n")
+}
 if permissions.autoApprove {
     emit(Style.yellow("  ⚠  --yolo: tool calls run without asking (secrets, outside-project writes and messages still ask)") + "\n")
 }

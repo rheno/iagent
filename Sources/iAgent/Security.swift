@@ -102,7 +102,10 @@ enum PathPolicy {
         switch zone(ctx.resolve(path ?? "."), cwd: ctx.cwd) {
         case .inside: return .none
         case .outside: return .askScoped("outside working dir")
-        case .sensitive: return .sensitive("reads a credential/secret file, which would be sent to the model provider")
+        case .sensitive:
+            // A cloud model provider must never receive a secret file; a model on this Mac may, with confirmation.
+            return ctx.localOnly ? .sensitive("reads a credential/secret file")
+                : .blocked("\(path ?? "") is a credential/secret file. Its contents are never sent to a cloud model provider; run iagent --local with a local model to work with it")
         }
     }
 
@@ -138,9 +141,108 @@ enum SecretEnv {
     }
 }
 
+// MARK: - Secret redaction before anything reaches the model (OWASP LLM02, CWE-200)
+
+enum Redact {
+    /// Exact secret values known at startup (API keys, *_TOKEN/*_SECRET env vars), masked wherever they appear.
+    nonisolated(unsafe) private(set) static var known: Set<String> = []
+
+    static func register(_ value: String?) {
+        guard let v = value?.trimmingCharacters(in: .whitespacesAndNewlines), v.count >= 8 else { return }
+        known.insert(v)
+    }
+
+    /// Registers the values of environment variables whose names say they hold a credential.
+    static func registerEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment) {
+        let name = try! NSRegularExpression(pattern: "(KEY|TOKEN|SECRET|PASSW(OR)?D|CREDENTIAL|AUTH)", options: .caseInsensitive)
+        for (k, v) in env where name.firstMatch(in: k, range: NSRange(k.startIndex..., in: k)) != nil { register(v) }
+    }
+
+    static let mask = "[REDACTED]"
+
+    /// Well-known credential formats, replaced whole.
+    private static let tokens: [NSRegularExpression] = [
+        "-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----[\\s\\S]*?(-----END [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----|\\z)",
+        "\\bsk-ant-[A-Za-z0-9_-]{20,}",
+        "\\bsk-(proj-|svcacct-|or-v1-)?[A-Za-z0-9_-]{20,}",
+        "\\b(gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|glpat-[A-Za-z0-9_-]{20,})",
+        "\\bxox[abposr]-[A-Za-z0-9-]{10,}",
+        "\\b(AKIA|ASIA)[0-9A-Z]{16}\\b",
+        "\\bAIza[0-9A-Za-z_-]{35}",
+        "\\b[srp]k_(live|test)_[A-Za-z0-9]{16,}",
+        "\\b(npm_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{30,})",
+        "\\beyJ[A-Za-z0-9_-]{8,}\\.eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}",
+    ].map { try! NSRegularExpression(pattern: $0) }
+
+    /// Credentials whose surroundings identify them; only the value (last capture group) is masked.
+    private static let values: [NSRegularExpression] = [
+        "(?i)\\b(bearer|basic)\\s+([A-Za-z0-9._~+/=-]{16,})",
+        "(?i)\\b[a-z][a-z0-9+.-]*://[^\\s:/@]+:([^\\s@/]+)@",
+        "(?i)[A-Za-z0-9_.-]*(api[_-]?key|secret|token|passw(or)?d|pwd|credential|private[_-]?key|auth)[A-Za-z0-9_.-]*[\"']?\\s*[:=]\\s*[\"']?([^\\s\"'`,;()<>{}\\[\\]]{8,})",
+    ].map { try! NSRegularExpression(pattern: $0) }
+
+    /// Masks secrets in text bound for the model provider. Returns the text and how many secrets were masked.
+    /// A key=value is masked only when the value has letters and digits, so code like `apiKey = config.apiKey` survives.
+    static func secrets(_ text: String) -> (text: String, count: Int) {
+        var s = text, count = 0
+        for v in known.sorted(by: { $0.count > $1.count }) where s.contains(v) {
+            count += s.components(separatedBy: v).count - 1
+            s = s.replacingOccurrences(of: v, with: mask)
+        }
+        for re in tokens {
+            let n = re.numberOfMatches(in: s, range: NSRange(s.startIndex..., in: s))
+            guard n > 0 else { continue }
+            count += n
+            s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: mask)
+        }
+        for re in values {
+            for m in re.matches(in: s, range: NSRange(s.startIndex..., in: s)).reversed() {
+                guard let r = Range(m.range(at: m.numberOfRanges - 1), in: s) else { continue }
+                let value = s[r]
+                guard value != mask, value.contains(where: \.isNumber), value.contains(where: \.isLetter) else { continue }
+                s.replaceSubrange(r, with: mask)
+                count += 1
+            }
+        }
+        return (s, count)
+    }
+}
+
+// MARK: - Local-only mode: nothing leaves this Mac
+
+enum LocalOnly {
+    /// Tools whose purpose is to reach the network, other devices or other people, or that can drive any app.
+    static let removedTools: Set<String> = ["web_fetch", "airdrop", "messages", "shortcuts", "applescript", "ios_device", "apple_devices"]
+
+    /// Actions that sync through iCloud, hand data to nearby devices (Universal Clipboard) or open URLs.
+    static let blockedActions: Set<String> = [
+        "mac.open", "mac.clipboard_set", "reminders.add", "reminders.complete", "reminders.delete",
+        "calendar.add", "calendar.delete", "notes.create", "notes.append", "simulator.openurl", "simulator.raw",
+    ]
+
+    /// Seatbelt profile for the bash tool: no network except loopback, no DNS, no opening apps/URLs through
+    /// LaunchServices and no Apple Events (another app could send the data on our behalf).
+    static let sandboxProfile = """
+    (version 1)
+    (allow default)
+    (deny network-outbound (remote ip))
+    (allow network-outbound (remote ip "localhost:*"))
+    (deny mach-lookup (global-name "com.apple.dnssd.service") (global-name "com.apple.mDNSResponder") (global-name "com.apple.nsurlsessiond"))
+    (deny lsopen)
+    (deny appleevent-send)
+    """
+}
+
 // MARK: - Transport (CWE-319)
 
 enum Transport {
+    /// This Mac only (not the LAN): the bar for --local, where nothing may leave the machine.
+    static func isLoopback(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return ["localhost", "::1", "[::1]"].contains(host) || host.hasSuffix(".localhost")
+            || host.split(separator: ".").first == "127" && host.split(separator: ".").count == 4
+    }
+
     /// Plain HTTP is only acceptable when traffic never leaves this machine or the local network.
     static func isLocal(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }

@@ -41,7 +41,8 @@ On top of the coding tools, the agent gets tools for your whole Apple setup. Jus
 **Approvals.**
 - Read-only actions (device scans, listing reminders/events, battery, …) run without asking.
 - Personal data reads (contacts, notes, clipboard) and any change ask first. `--yolo` or answering `a` skips the prompt.
-- `messages` always asks before each message, even with `--yolo`, and can't be used in non-interactive runs. The same goes for reading secret files (`.env`, SSH/cloud keys) and writing shell-startup files.
+- `messages` always asks before each message, even with `--yolo`, and can't be used in non-interactive runs. The same goes for writing shell-startup files.
+- Secret files (`.env`, SSH/cloud keys) are never read for a cloud model. With `--local` they can be read after confirming each time.
 
 **Not possible from macOS:**
 - Find My locations.
@@ -86,6 +87,30 @@ written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ct
 Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not submitted until you press
 Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and Ctrl-C during a turn stops it.
 
+## Keeping data private
+
+**Secrets are always masked.** Before anything is sent to the model (your messages, tool results, project
+instruction files), iagent replaces credentials with `[REDACTED]` and tells you when it did:
+
+- known formats: Anthropic/OpenAI/GitHub/GitLab/Slack/AWS/Google/Stripe/npm/Hugging Face keys, JWTs, private key blocks
+- `user:password@` in URLs, `Bearer …` tokens, and `password=`/`token:`/`API_KEY=` style values containing letters and digits
+- the exact value of your API key and of every environment variable named like `*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`
+
+Secret files are never read for a cloud model at all. Masking is pattern-based. A secret in an unusual format can
+still get through, so for confidential work use local-only mode.
+
+**Local-only mode keeps everything on this Mac.** Turn it on with `iagent --local`, `"localOnly": true` in the config,
+or `IAGENT_LOCAL_ONLY=1`. In this mode:
+
+- The model server must be on this Mac (`localhost`, `127.0.0.1`, `::1`). Cloud APIs and LAN servers are refused, and
+  the provider defaults to Ollama even if an API key is set. Example: `iagent --local -m qwen3-coder`.
+- Tools that send data elsewhere are removed: `web_fetch`, `messages`, `airdrop`, `shortcuts`, `applescript`,
+  `ios_device`, `apple_devices`.
+- Actions that sync through iCloud or reach other devices are blocked: reminder/calendar/note changes,
+  `mac open`, `mac clipboard_set` (Universal Clipboard), `simulator openurl`/`raw`.
+- `bash` runs in a macOS sandbox. It can't connect to anything but localhost, resolve DNS names, open apps or URLs, or
+  send Apple Events. Builds, git, and tests that don't need the network work normally.
+
 ## Choosing a model
 
 | Provider | Command | Key env var |
@@ -119,9 +144,9 @@ Settings are applied in this order, with later ones winning: `~/.iagent/config.j
 }
 ```
 
-To switch profiles for a single run: `IAGENT_PROFILE=claude iagent`. Other env vars: `IAGENT_PROVIDER`, `IAGENT_MODEL`, `IAGENT_BASE_URL`, `IAGENT_API_KEY`, `IAGENT_EFFORT`.
+To switch profiles for a single run: `IAGENT_PROFILE=claude iagent`. Other env vars: `IAGENT_PROVIDER`, `IAGENT_MODEL`, `IAGENT_BASE_URL`, `IAGENT_API_KEY`, `IAGENT_EFFORT`, `IAGENT_LOCAL_ONLY`.
 
-Keys: `provider`, `kind` (`openai`|`anthropic`), `baseURL`, `model`, `apiKey`, `apiKeyEnv`, `apiKeyKeychain` (+ optional `apiKeyKeychainAccount`), `maxTokens`, `effort`, `thinking` (bool), `headers`, `allowInsecureHTTP` (bool), `appleTools` (bool).
+Keys: `provider`, `kind` (`openai`|`anthropic`), `baseURL`, `model`, `apiKey`, `apiKeyEnv`, `apiKeyKeychain` (+ optional `apiKeyKeychainAccount`), `maxTokens`, `effort`, `thinking` (bool), `headers`, `allowInsecureHTTP` (bool), `appleTools` (bool), `localOnly` (bool).
 
 Store the API key in the macOS Keychain instead of the file:
 

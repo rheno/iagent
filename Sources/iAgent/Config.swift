@@ -31,6 +31,8 @@ struct Config {
     var apiKeyKeychain: String?
     var apiKeyKeychainAccount: String?
     var allowInsecureHTTP = false
+    /// Nothing leaves this Mac: model server on loopback only, network tools off, bash sandboxed without network.
+    var localOnly = false
     var maxTokens: Int?
     var effort: String?
     var thinking = true
@@ -76,6 +78,7 @@ struct Config {
         if let s = v["apiKeyKeychain"] as? String { apiKeyKeychain = s }
         if let s = v["apiKeyKeychainAccount"] as? String { apiKeyKeychainAccount = s }
         if let b = v["allowInsecureHTTP"] as? Bool { allowInsecureHTTP = b }
+        if let b = v["localOnly"] as? Bool { localOnly = b }
         if let n = v["maxTokens"] as? Int { maxTokens = n }
         if let s = v["effort"] as? String { effort = s }
         if let b = v["thinking"] as? Bool { thinking = b }
@@ -90,11 +93,13 @@ struct Config {
         if let s = env["IAGENT_MODEL"] { model = s }
         if let s = env["IAGENT_API_KEY"] { apiKey = s }
         if let s = env["IAGENT_EFFORT"] { effort = s }
+        if let s = env["IAGENT_LOCAL_ONLY"] { localOnly = ["1", "true", "yes"].contains(s.lowercased()) }
     }
 
     func makeProvider() throws -> LLMProvider {
         let env = ProcessInfo.processInfo.environment
-        let name = provider ?? autodetectProvider(env)
+        // Local-only never autodetects a cloud provider from an API key in the environment.
+        let name = provider ?? (localOnly ? (baseURL != nil ? "custom" : "ollama") : autodetectProvider(env))
         let preset = presets[name]
         guard let resolvedKind = kind ?? preset?.kind ?? (baseURL != nil ? .openai : nil) else {
             throw AgentError("Unknown provider '\(name)'. Use one of: \(presets.keys.sorted().joined(separator: ", ")), or set --base-url for any OpenAI-compatible server.")
@@ -105,6 +110,9 @@ struct Config {
         guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else {
             throw AgentError("Base URL must be http(s): \(urlString)")
         }
+        if localOnly && !Transport.isLoopback(url) {
+            throw AgentError("Local-only mode refuses the model server \(url.host ?? urlString): prompts and files would leave this Mac. Use a model running on this Mac, e.g. --provider ollama or --provider lmstudio, or drop --local.")
+        }
         // Prompts, code and the API key must not cross the network in cleartext (CWE-319).
         if url.scheme?.lowercased() == "http" && !Transport.isLocal(url) && !allowInsecureHTTP {
             throw AgentError("Refusing plain-HTTP connection to \(url.host ?? urlString): prompts and the API key would be sent unencrypted. Use https, or set \"allowInsecureHTTP\": true in the config if you really mean it.")
@@ -113,6 +121,7 @@ struct Config {
         let keyEnv = apiKeyEnv ?? base?.keyEnv
         if let keyEnv { SecretEnv.names.insert(keyEnv) }
         let key = try apiKey ?? keychainKey() ?? keyEnv.flatMap { env[$0] }
+        Redact.register(key)
         guard let model = model ?? base?.defaultModel else {
             throw AgentError("No model set for provider '\(name)'. Pass --model <id> or set IAGENT_MODEL.")
         }

@@ -9,6 +9,8 @@ enum Approval: Equatable {
     case askScoped(String)
     /// Asks every time, even with --yolo, and is refused in non-interactive runs. The reason is shown.
     case sensitive(String)
+    /// Never runs, whatever the user or --yolo says. The reason is sent back to the model.
+    case blocked(String)
 }
 
 struct Tool {
@@ -43,6 +45,7 @@ final class Permissions {
             key = "\(baseKey) [\(Sanitize.terminal(scope))]"
             if autoApprove || alwaysAllowed.contains(key) { return nil }
         case .sensitive(let why): reason = why
+        case .blocked(let why): return "Blocked: \(why)."
         }
         guard interactive else {
             return reason.map { "Permission denied: '\(key)' always needs interactive confirmation because it \($0)." }
@@ -71,6 +74,8 @@ final class Permissions {
 struct ToolContext {
     let cwd: URL
     let permissions: Permissions
+    /// --local: no data may leave this Mac (see LocalOnly).
+    var localOnly = false
 
     func resolve(_ path: String) -> URL {
         let expanded = (path as NSString).expandingTildeInPath
@@ -152,8 +157,9 @@ let maxReadBytes = 20_000_000
 let maxFetchBytes = 5_000_000
 
 enum Toolbox {
-    static func all(apple: Bool) -> [Tool] {
-        [readFile, writeFile, editFile, glob, grep, bash, webFetch] + (apple ? AppleTools.all : [])
+    static func all(apple: Bool, localOnly: Bool = false) -> [Tool] {
+        let tools = [readFile, writeFile, editFile, glob, grep, bash, webFetch] + (apple ? AppleTools.all : [])
+        return localOnly ? tools.filter { !LocalOnly.removedTools.contains($0.name) } : tools
     }
 
     static func execute(_ call: ToolCall, tools: [Tool], ctx: ToolContext) async -> (output: String, isError: Bool) {
@@ -169,7 +175,11 @@ enum Toolbox {
         let shownArgs = Sanitize.displayArgs(args)
         emit(Style.cyan("⏺ ") + Style.bold(tool.name) + Style.dim("(\(tool.summary(shownArgs)))") + "\n")
         let key = (shownArgs["action"] as? String).map { "\(tool.name).\($0)" } ?? tool.name
-        if let denied = ctx.permissions.check(key: key, level: tool.approval(args, ctx), preview: tool.preview?(shownArgs) ?? "") {
+        var level = tool.approval(args, ctx)
+        if ctx.localOnly && (LocalOnly.removedTools.contains(tool.name) || LocalOnly.blockedActions.contains(key)) {
+            level = .blocked("\(key) can send data off this Mac, so it is disabled in local-only mode")
+        }
+        if let denied = ctx.permissions.check(key: key, level: level, preview: tool.preview?(shownArgs) ?? "") {
             emit(Style.red("  ⎿  \(denied)\n"))
             return (denied, true)
         }
@@ -179,12 +189,19 @@ enum Toolbox {
             let shown = lines.prefix(3).map { "     " + String($0.prefix(160)) }.joined(separator: "\n")
             let more = lines.count > 3 ? "\n     … +\(lines.count - 3) lines" : ""
             emit(Style.dim("  ⎿" + (shown.isEmpty ? "  (no output)" : String(shown.dropFirst(3))) + more) + "\n")
-            return (truncate(out), false)
+            return (truncate(redacted(out)), false)
         } catch {
             let msg = "Error: \((error as? AgentError)?.message ?? error.localizedDescription)"
             emit(Style.red("  ⎿  \(Sanitize.terminal(String(msg.prefix(300))))\n"))
-            return (msg, true)
+            return (redacted(msg), true)
         }
+    }
+
+    /// Tool output goes to the model provider: mask any secrets in it first and tell the user.
+    static func redacted(_ out: String) -> String {
+        let (clean, n) = Redact.secrets(out)
+        if n > 0 { emit(Style.green("  ⎿  🔒 masked \(n) secret\(n == 1 ? "" : "s") before sending to the model") + "\n") }
+        return clean
     }
 
     // MARK: read_file
@@ -394,7 +411,8 @@ enum Toolbox {
             return c.components(separatedBy: "\n").map { Style.yellow("    $ " + $0) }.joined(separator: "\n")
         },
         run: { args, ctx in
-            try await runShell(try str(args, "command"), cwd: ctx.cwd, timeout: Double(min(int(args, "timeout") ?? 120, 600)))
+            try await runShell(try str(args, "command"), cwd: ctx.cwd, timeout: Double(min(int(args, "timeout") ?? 120, 600)),
+                               sandboxed: ctx.localOnly)
         })
 
     // MARK: web_fetch

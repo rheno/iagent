@@ -31,6 +31,9 @@ User-facing docs live in [README.md](README.md). This file covers how the code i
 - **Never weaken these without an explicit request:** `.sensitive` approvals (secret files, shell-startup/
   LaunchAgent writes, `messages`), API-key scrubbing from child envs (`SecretEnv`), HTTPS-only remote transport
   (`Transport.isLocal`), no redirects on model API calls (`NoRedirects`), same-host redirects for `web_fetch`,
+  secret masking of everything sent to the model (`Redact`, applied in `Agent.run`, the system prompt and
+  `Toolbox.execute`), `.blocked` secret-file reads for cloud models, local-only mode (`LocalOnly`: loopback model
+  server, removed/blocked egress tools, sandboxed `bash`),
   size/time limits (`maxReadBytes`, `maxFetchBytes`, `OutputBuffer.cap`, `truncate` at 30k chars, 60 iterations).
 - **Nothing persisted to disk** by the agent (ephemeral URLSessions, no transcripts, prompt history in memory only).
   Temp files are deleted.
@@ -54,7 +57,7 @@ Sources/iAgent/
   AnthropicProvider.swift  Messages API streaming, adaptive thinking, effort, prompt caching, tool_use/tool_result
   OpenAIProvider.swift     Chat Completions streaming + tool calls
   Tools.swift              Tool/Approval/Permissions/ToolContext types, Toolbox registry + execute(), coding tools
-  Security.swift           Sanitize, PathPolicy (inside/outside/sensitive), operand(), SecretEnv, Transport, redirect delegates
+  Security.swift           Sanitize, PathPolicy (inside/outside/sensitive), operand(), SecretEnv, Redact, LocalOnly, Transport, redirect delegates
   Process.swift            argv process runner with timeout + output cap, runShell (bash tool only), runOSAScript, ToolAvailability
   Support.swift            ANSI Style, emit/emitError, JSON helpers, AgentError, truncate, Ctrl-C Interrupter
   AppleDevices.swift       AppleTools.all, apple_devices, ios_device (devicectl/libimobiledevice), simulator, airdrop, Bonjour, AirDropHelper
@@ -86,6 +89,8 @@ both providers automatically.
 
 - Multi-action tools take an `"action"` argument; use `AppleTools.actionSchema`. The "always allow" key becomes
   `tool.action`, so approvals are per action.
+- A new tool that can send data off the Mac (network, other devices, iCloud sync, other apps) must be added to
+  `LocalOnly.removedTools`, or its egress actions to `LocalOnly.blockedActions`.
 - Pick the approval level deliberately: `.none` only for read-only, in-project, non-personal reads; `.ask` for
   changes; `.askScoped(scope)` when "always" must be limited (one host, one exact command, one path);
   `.sensitive(reason)` for anything that must be confirmed every time. For paths, use

