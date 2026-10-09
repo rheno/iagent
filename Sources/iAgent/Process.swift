@@ -1,0 +1,139 @@
+import Foundation
+
+/// Collects child output up to a fixed cap so a runaway command (`yes`, a huge `cat`) can't exhaust memory.
+final class OutputBuffer: @unchecked Sendable {
+    static let cap = 10_000_000
+    private let lock = NSLock()
+    private var data = Data()
+    private var dropped = 0
+    func append(_ d: Data) {
+        lock.lock(); defer { lock.unlock() }
+        let room = max(Self.cap - data.count, 0)
+        data.append(d.prefix(room))
+        dropped += d.count - min(d.count, room)
+    }
+    var string: String {
+        lock.lock(); defer { lock.unlock() }
+        let s = String(decoding: data, as: UTF8.self)
+        return dropped > 0 ? "[output truncated: only the first \(Self.cap) bytes kept, \(dropped) more discarded]\n" + s : s
+    }
+}
+
+struct CommandResult {
+    let status: Int32
+    let stdout: String
+    let stderr: String
+    let note: String   // "[timed out ...]" / "[interrupted ...]" or empty
+
+    var ok: Bool { status == 0 && note.isEmpty }
+    var combined: String {
+        [stdout, stderr].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+}
+
+/// Runs a program with an explicit argv (no shell, so model-supplied arguments can't inject commands).
+/// The program is resolved on PATH via /usr/bin/env. Honors task cancellation and a timeout.
+func runCommand(_ argv: [String], cwd: URL? = nil, timeout: Double = 60, stdin: Data? = nil,
+                mergeStderr: Bool = false) async throws -> CommandResult {
+    precondition(!argv.isEmpty)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = argv
+    process.environment = SecretEnv.childEnvironment
+    if let cwd { process.currentDirectoryURL = cwd }
+
+    let outPipe = Pipe()
+    let errPipe = mergeStderr ? outPipe : Pipe()
+    process.standardOutput = outPipe
+    process.standardError = errPipe
+    let inPipe = stdin.map { _ in Pipe() }
+    process.standardInput = inPipe ?? FileHandle.nullDevice
+
+    let out = OutputBuffer()
+    let err = OutputBuffer()
+    outPipe.fileHandleForReading.readabilityHandler = { h in
+        let d = h.availableData
+        if !d.isEmpty { out.append(d) }
+    }
+    if !mergeStderr {
+        errPipe.fileHandleForReading.readabilityHandler = { h in
+            let d = h.availableData
+            if !d.isEmpty { err.append(d) }
+        }
+    }
+
+    do {
+        try process.run()
+    } catch {
+        throw AgentError("Could not run \(argv[0]): \(error.localizedDescription)")
+    }
+    if let inPipe, let stdin {
+        inPipe.fileHandleForWriting.write(stdin)
+        try? inPipe.fileHandleForWriting.close()
+    }
+
+    let deadline = Date().addingTimeInterval(timeout)
+    var note = ""
+    while process.isRunning {
+        if Task.isCancelled { process.terminate(); note = "[interrupted by user]"; break }
+        if Date() > deadline { process.terminate(); note = "[timed out after \(Int(timeout))s]"; break }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+    process.waitUntilExit()
+    outPipe.fileHandleForReading.readabilityHandler = nil
+    if let rest = try? outPipe.fileHandleForReading.readToEnd() { out.append(rest) }
+    if !mergeStderr {
+        errPipe.fileHandleForReading.readabilityHandler = nil
+        if let rest = try? errPipe.fileHandleForReading.readToEnd() { err.append(rest) }
+    }
+    return CommandResult(status: process.terminationStatus, stdout: out.string, stderr: err.string, note: note)
+}
+
+/// Like runCommand, but throws with the command's own error output on failure and returns trimmed stdout.
+func runChecked(_ argv: [String], timeout: Double = 60, stdin: Data? = nil) async throws -> String {
+    let r = try await runCommand(argv, timeout: timeout, stdin: stdin)
+    guard r.ok else {
+        let detail = [r.combined, r.note].filter { !$0.isEmpty }.joined(separator: " ")
+        throw AgentError("`\(argv.prefix(3).joined(separator: " "))` failed (exit \(r.status)): \(detail.isEmpty ? "no output" : detail)")
+    }
+    return r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+func runShell(_ command: String, cwd: URL, timeout: Double) async throws -> String {
+    let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+    let r = try await runCommand([shell, "-c", command], cwd: cwd, timeout: timeout, mergeStderr: true)
+    let out = r.stdout.trimmingCharacters(in: .newlines)
+    return (out.isEmpty ? "(no output)" : out) + (r.note.isEmpty ? "" : "\n" + r.note) + "\n[exit code \(r.status)]"
+}
+
+/// Runs AppleScript or JXA. Values are passed as argv to `on run argv` / `function run(argv)`,
+/// never interpolated into the script source.
+func runOSAScript(_ script: String, javascript: Bool = false, args: [String] = [], timeout: Double = 120) async throws -> String {
+    var argv = ["osascript"]
+    if javascript { argv += ["-l", "JavaScript"] }
+    // `--` ends option parsing: without it a value like "-e" would be read as another script statement (CWE-88).
+    argv += ["-e", script, "--"] + args
+    let r = try await runCommand(argv, timeout: timeout)
+    guard r.ok else {
+        var msg = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if msg.contains("-1743") || msg.localizedCaseInsensitiveContains("not authorized") {
+            msg += "\nHint: allow your terminal app under System Settings → Privacy & Security → Automation."
+        }
+        throw AgentError("osascript failed: \(msg.isEmpty ? r.note : msg)")
+    }
+    return r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// Caches `which`/`xcrun --find` lookups for optional external tooling.
+actor ToolAvailability {
+    static let shared = ToolAvailability()
+    private var cache: [String: Bool] = [:]
+
+    func has(_ name: String) async -> Bool {
+        if let v = cache[name] { return v }
+        let argv = ["devicectl", "simctl"].contains(name) ? ["xcrun", "--find", name] : ["which", name]
+        let v = (try? await runCommand(argv, timeout: 15))?.status == 0
+        cache[name] = v
+        return v
+    }
+}

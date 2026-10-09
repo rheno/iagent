@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime entitlements: only the protected resources iAgent actually uses. No JIT, no unsigned
+     memory, no library validation exceptions, no DYLD environment variables. -->
+<plist version="1.0">
+<dict>
+    <!-- Notes, Messages, Music, System Events via osascript -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <!-- Reminders and Calendar (EventKit) -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <!-- Contacts search -->
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+</dict>
+</plist>

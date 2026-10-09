@@ -1,0 +1,247 @@
+import Foundation
+
+let version = "0.2.0"
+
+// Internal helper mode: the `airdrop` tool re-launches this binary to host the AppKit sharing UI.
+if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == AirDropHelper.flag {
+    AirDropHelper.run(Array(CommandLine.arguments.dropFirst(2)))
+}
+
+let usageText = """
+iagent \(version) — a terminal coding agent for any LLM, wired into the Apple ecosystem
+
+USAGE
+  iagent [options] [prompt]          interactive session (optionally starting with prompt)
+  iagent -p "prompt" [options]       one-shot: run the task, print, exit
+  echo "prompt" | iagent [options]   one-shot from stdin
+
+OPTIONS
+  --provider <name>     anthropic | openai | openrouter | ollama | lmstudio (default: autodetect from API key env vars)
+  -m, --model <id>      model id, e.g. claude-opus-5-5, gpt-5, qwen3-coder, anthropic/claude-sonnet-5-5
+  --base-url <url>      any OpenAI-compatible endpoint (e.g. http://localhost:8000/v1)
+  --kind <openai|anthropic>  API dialect for a custom --base-url (default: openai)
+  --api-key-env <VAR>   read the API key from this environment variable
+  --max-tokens <n>      max output tokens per model call
+  --effort <level>      Anthropic effort: low | medium | high | xhigh | max (default: high)
+  --no-thinking         don't request adaptive thinking (Anthropic)
+  --yolo                auto-approve tool calls (sending messages still always asks)
+  --no-apple            disable the Apple ecosystem tools (smaller tool list for small models)
+  --run-tool <name> <json>  run one tool directly without a model (debugging), e.g.
+                        --run-tool apple_devices '{}'
+  -C, --cwd <dir>       working directory (default: current)
+  -h, --help            show this help
+  -v, --version         print version
+
+CONFIG
+  ~/.iagent/config.json and IAGENT_PROVIDER / _MODEL / _BASE_URL / _API_KEY / _EFFORT / _PROFILE env vars.
+  See README.md for examples.
+"""
+
+let slashHelp = """
+  /help             show this help
+  /model [id]       show or switch the model
+  /clear            start a fresh conversation
+  /tools            list available tools
+  /yolo             toggle auto-approval of tool calls
+  /cost             show token usage for this session
+  /exit, /quit      leave (Ctrl-D also works; Ctrl-C interrupts a running turn)
+  Lines ending in \\ continue on the next line.
+"""
+
+// MARK: - Argument parsing
+
+var config = Config()
+var oneShot: String?
+var positional: [String] = []
+var cwdPath = FileManager.default.currentDirectoryPath
+var flags = Config()   // CLI values, applied last
+var cliSet: Set<String> = []
+var directTool: (name: String, args: String)?
+
+do {
+    var args = Array(CommandLine.arguments.dropFirst())
+    func value(_ flag: String) throws -> String {
+        guard !args.isEmpty else { throw AgentError("\(flag) needs a value") }
+        return args.removeFirst()
+    }
+    while !args.isEmpty {
+        let a = args.removeFirst()
+        switch a {
+        case "-h", "--help": print(usageText); exit(0)
+        case "-v", "--version": print(version); exit(0)
+        case "-p", "--print": oneShot = try value(a)
+        case "--provider": flags.provider = try value(a); cliSet.insert("provider")
+        case "-m", "--model": flags.model = try value(a); cliSet.insert("model")
+        case "--base-url": flags.baseURL = try value(a); cliSet.insert("baseURL")
+        case "--kind":
+            let k = try value(a)
+            guard let kind = ProviderKind(rawValue: k) else { throw AgentError("--kind must be openai or anthropic") }
+            flags.kind = kind; cliSet.insert("kind")
+        case "--api-key-env": flags.apiKeyEnv = try value(a); cliSet.insert("apiKeyEnv")
+        case "--max-tokens":
+            guard let n = Int(try value(a)) else { throw AgentError("--max-tokens needs an integer") }
+            flags.maxTokens = n; cliSet.insert("maxTokens")
+        case "--effort": flags.effort = try value(a); cliSet.insert("effort")
+        case "--no-thinking": flags.thinking = false; cliSet.insert("thinking")
+        case "--yolo", "--dangerously-skip-permissions": flags.autoApprove = true
+        case "--no-apple": flags.appleTools = false; cliSet.insert("appleTools")
+        case "--run-tool": directTool = (try value(a), try value(a))
+        case "-C", "--cwd": cwdPath = (try value(a) as NSString).expandingTildeInPath
+        default:
+            if a.hasPrefix("-") && a.count > 1 { throw AgentError("Unknown option \(a) (see --help)") }
+            positional.append(a)
+        }
+    }
+
+    try config.loadFile()
+    config.loadEnv()
+    if cliSet.contains("provider") {
+        // Switching provider on the CLI shouldn't inherit another provider's URL/model/key settings.
+        config.provider = flags.provider
+        config.baseURL = nil; config.model = nil; config.apiKey = nil; config.apiKeyEnv = nil; config.kind = nil
+    }
+    if cliSet.contains("model") { config.model = flags.model }
+    if cliSet.contains("baseURL") { config.baseURL = flags.baseURL }
+    if cliSet.contains("kind") { config.kind = flags.kind }
+    if cliSet.contains("apiKeyEnv") { config.apiKeyEnv = flags.apiKeyEnv; config.apiKey = nil }
+    if cliSet.contains("maxTokens") { config.maxTokens = flags.maxTokens }
+    if cliSet.contains("effort") { config.effort = flags.effort }
+    if cliSet.contains("thinking") { config.thinking = false }
+    if cliSet.contains("appleTools") { config.appleTools = false }
+    config.autoApprove = flags.autoApprove
+} catch {
+    emitError("error: \(error)")
+    exit(2)
+}
+
+var isDir: ObjCBool = false
+guard FileManager.default.fileExists(atPath: cwdPath, isDirectory: &isDir), isDir.boolValue else {
+    emitError("error: working directory \(cwdPath) does not exist")
+    exit(2)
+}
+
+let permissions = Permissions(autoApprove: config.autoApprove)
+// Resolve symlinks (e.g. /tmp, /var) so paths from the file enumerator share the cwd prefix.
+let ctx = ToolContext(cwd: realPath(URL(fileURLWithPath: cwdPath).standardizedFileURL), permissions: permissions)
+let tools = Toolbox.all(apple: config.appleTools)
+
+if let direct = directTool {
+    let call = ToolCall(id: "direct", name: direct.name, arguments: direct.args)
+    let (output, isError) = await Toolbox.execute(call, tools: tools, ctx: ctx)
+    print("\n" + Sanitize.terminal(output))
+    exit(isError ? 1 : 0)
+}
+
+for warning in config.warnings { emitError("warning: \(warning)") }
+
+let provider: LLMProvider
+do {
+    provider = try config.makeProvider()
+} catch {
+    emitError("error: \(error)")
+    exit(2)
+}
+
+let agent = Agent(provider: provider, tools: tools, ctx: ctx)
+Interrupter.shared.install()
+
+/// Runs one request in a cancellable task so Ctrl-C interrupts it without killing the session.
+func runTurn(_ input: String) async -> Bool {
+    let task = Task<Bool, Never> {
+        do {
+            try await agent.run(input)
+            return true
+        } catch {
+            if Task.isCancelled || error is CancellationError { return false }
+            emitError("error: \(error)")
+            return false
+        }
+    }
+    Interrupter.shared.track(task)
+    let ok = await task.value
+    Interrupter.shared.track(nil)
+    return ok
+}
+
+// MARK: - One-shot mode
+
+if oneShot == nil && isatty(STDIN_FILENO) == 0 {
+    let data = FileHandle.standardInput.readDataToEndOfFile()
+    let piped = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    let prefix = positional.joined(separator: " ")
+    oneShot = [prefix, piped].filter { !$0.isEmpty }.joined(separator: "\n\n")
+}
+
+if let prompt = oneShot {
+    guard !prompt.isEmpty else { emitError("error: empty prompt"); exit(2) }
+    exit(await runTurn(prompt) ? 0 : 1)
+}
+
+// MARK: - Interactive REPL
+
+emit(Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.label) · \(provider.model)") + "\n")
+emit(Style.dim("  cwd: \(ctx.cwd.path)  — /help for commands") + "\n")
+if permissions.autoApprove {
+    emit(Style.yellow("  ⚠  --yolo: tool calls run without asking (secrets, outside-project writes and messages still ask)") + "\n")
+}
+emit("\n")
+
+func readInput() -> String? {
+    emit(Style.bold(Style.magenta("❯ ")))
+    var lines: [String] = []
+    while let line = readLine() {
+        if line.hasSuffix("\\") {
+            lines.append(String(line.dropLast()))
+            emit(Style.dim("… "))
+            continue
+        }
+        lines.append(line)
+        return lines.joined(separator: "\n")
+    }
+    return lines.isEmpty ? nil : lines.joined(separator: "\n")
+}
+
+var pending: String? = positional.isEmpty ? nil : positional.joined(separator: " ")
+
+while true {
+    guard let raw = pending ?? readInput() else { emit("\n"); break }
+    pending = nil
+    let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if input.isEmpty { continue }
+
+    if input.hasPrefix("/") {
+        let parts = input.split(separator: " ", maxSplits: 1).map(String.init)
+        switch parts[0] {
+        case "/exit", "/quit":
+            exit(0)
+        case "/help":
+            emit(slashHelp + "\n")
+        case "/clear":
+            agent.reset()
+            emit(Style.dim("  Conversation cleared.\n"))
+        case "/model":
+            if parts.count > 1 {
+                provider.model = parts[1].trimmingCharacters(in: .whitespaces)
+                emit(Style.dim("  Model set to \(provider.model)\n"))
+            } else {
+                emit(Style.dim("  \(provider.label) · \(provider.model)\n"))
+            }
+        case "/tools":
+            for t in agent.tools {
+                emit("  " + Style.bold(t.name) + (t.approval([:], ctx) == .none ? "" : Style.yellow((t.schema["properties"] as? [String: Any])?["action"] != nil ? " (asks for changes)" : " (asks)")) + Style.dim(" — \(t.description.prefix(100))") + "\n")
+            }
+        case "/yolo":
+            permissions.autoApprove.toggle()
+            emit(Style.dim("  Auto-approve is now \(permissions.autoApprove ? "ON" : "off")\n"))
+        case "/cost":
+            let u = agent.usage
+            emit(Style.dim("  input: \(u.input) tokens (cache read: \(u.cacheRead)) · output: \(u.output) tokens\n"))
+        default:
+            emit(Style.yellow("  Unknown command \(parts[0]). /help lists commands.\n"))
+        }
+        continue
+    }
+
+    _ = await runTurn(input)
+    emit("\n")
+}
