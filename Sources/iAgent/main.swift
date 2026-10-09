@@ -37,15 +37,24 @@ CONFIG
   See README.md for examples.
 """
 
-let slashHelp = """
-  /help             show this help
-  /model [id]       show or switch the model
-  /clear            start a fresh conversation
-  /tools            list available tools
-  /yolo             toggle auto-approval of tool calls
-  /cost             show token usage for this session
-  /exit, /quit      leave (Ctrl-D also works; Ctrl-C interrupts a running turn)
-  Lines ending in \\ continue on the next line.
+let slashCommands = [
+    SlashCommand(name: "/help", args: "", summary: "show this help"),
+    SlashCommand(name: "/model", args: "[id]", summary: "show or switch the model"),
+    SlashCommand(name: "/clear", args: "", summary: "start a fresh conversation"),
+    SlashCommand(name: "/tools", args: "", summary: "list available tools"),
+    SlashCommand(name: "/yolo", args: "", summary: "toggle auto-approval of tool calls"),
+    SlashCommand(name: "/cost", args: "", summary: "show token usage for this session"),
+    SlashCommand(name: "/exit", args: "", summary: "leave (Ctrl-D also works)"),
+    SlashCommand(name: "/quit", args: "", summary: "leave"),
+]
+
+let slashHelp = slashCommands.map { "  " + ($0.name + " " + $0.args).padding(toLength: 18, withPad: " ", startingAt: 0) + $0.summary }
+    .joined(separator: "\n") + """
+
+  Type / to pick a command (↑/↓ to choose, Tab to complete, Enter to run, Esc to close).
+  ↑/↓ recall earlier inputs. Ctrl-J, Option-Enter or a trailing \\ starts a new line; pastes keep their newlines.
+  Ctrl-A/E line start/end · Option-←/→ by word · Ctrl-U/K/W delete · Ctrl-L clear screen
+  Ctrl-C clears the input (twice on an empty prompt exits) and interrupts a running turn.
 """
 
 // MARK: - Argument parsing
@@ -186,7 +195,10 @@ if permissions.autoApprove {
 }
 emit("\n")
 
+let editor = LineEditor.isSupported ? LineEditor(commands: slashCommands) : nil
+
 func readInput() -> String? {
+    if let editor { return editor.read() }
     emit(Style.bold(Style.magenta("❯ ")))
     var lines: [String] = []
     while let line = readLine() {
@@ -202,6 +214,7 @@ func readInput() -> String? {
 }
 
 var pending: String? = positional.isEmpty ? nil : positional.joined(separator: " ")
+if let pending { editor?.history.add(pending) }
 
 while true {
     guard let raw = pending ?? readInput() else { emit("\n"); break }

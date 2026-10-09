@@ -32,7 +32,8 @@ User-facing docs live in [README.md](README.md). This file covers how the code i
   LaunchAgent writes, `messages`), API-key scrubbing from child envs (`SecretEnv`), HTTPS-only remote transport
   (`Transport.isLocal`), no redirects on model API calls (`NoRedirects`), same-host redirects for `web_fetch`,
   size/time limits (`maxReadBytes`, `maxFetchBytes`, `OutputBuffer.cap`, `truncate` at 30k chars, 60 iterations).
-- **Nothing persisted to disk** by the agent (ephemeral URLSessions, no transcripts). Temp files are deleted.
+- **Nothing persisted to disk** by the agent (ephemeral URLSessions, no transcripts, prompt history in memory only).
+  Temp files are deleted.
 - **Hardened runtime, minimal entitlements.** Adding a new protected resource means updating `iAgent.entitlements`
   *and* adding a usage string to `Info.plist` (embedded into the binary via `-sectcreate` in `Package.swift`).
 
@@ -45,7 +46,8 @@ iAgent.entitlements        Apple Events, Calendars/Reminders, Contacts — nothi
 scripts/build-release.sh   release build + hardened-runtime codesign → dist/iagent (SIGN_IDENTITY for Developer ID)
 assets/                    logos, app icon, README screenshot
 Sources/iAgent/
-  main.swift               top-level script: flag parsing, config merge, --run-tool, one-shot mode, REPL + slash cmds
+  main.swift               top-level script: flag parsing, config merge, --run-tool, one-shot mode, REPL + slash cmds (add new ones to `slashCommands` so /help and the menu list them)
+  LineEditor.swift         raw-mode prompt: LineBuffer editing, in-memory InputHistory, SlashCompletion menu, PromptLayout
   Config.swift             provider presets, ~/.iagent/config.json (with profiles) → IAGENT_* env → CLI flags; Keychain key
   Models.swift             ChatMessage/AssistantTurn/ToolCall/Usage, LLMProvider protocol, HTTP sessions, SSE + retry
   Agent.swift              agent loop (model → tools → model …), system prompt builder, StreamRenderer
@@ -110,6 +112,8 @@ toolchain, so this is not a dependency) and `@testable import iAgent`:
   policy and symlinked secrets, operand/osascript/argv injection, API-key scrubbing, HTTPS rule, redirect
   delegates, approval levels, output/time limits). A security change must keep these green and add a test.
 - `Tests/iAgentTests/ToolTests.swift`: coding-tool behavior, run in a temp `Sandbox` directory.
+- `Tests/iAgentTests/LineEditorTests.swift`: prompt editing, history, `/` completion and wrapping (pure logic;
+  the raw-terminal I/O is checked by hand in a real terminal).
 
 Tests don't cover the providers' HTTP streaming or the Apple tools (TCC prompts, Xcode, real devices). Exercise
 those by hand with `--run-tool`.

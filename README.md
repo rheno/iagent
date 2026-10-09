@@ -78,9 +78,13 @@ iagent -p "fix the failing test" --yolo # one-shot, auto-approve tools
 git diff | iagent -p "review this diff" # one-shot from stdin
 ```
 
-REPL commands: `/help`, `/model [id]`, `/clear`, `/tools`, `/yolo`, `/cost`, `/exit`.
-Ctrl-C stops the running turn, and Ctrl-C at the prompt exits. End a line with `\` to keep typing on the next line.
-To get arrow-key history, run it under `rlwrap iagent`.
+REPL commands: `/help`, `/model [id]`, `/clear`, `/tools`, `/yolo`, `/cost`, `/exit`. Type `/` to open a command
+menu that filters as you type: ↑/↓ choose, Tab completes, Enter runs, Esc closes.
+
+The prompt is a full line editor. ↑/↓ recall earlier inputs from this session (history is kept in memory only, never
+written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ctrl-L work as in a shell. For a new line, press
+Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not submitted until you press
+Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and Ctrl-C during a turn stops it.
 
 ## Choosing a model
 
@@ -149,6 +153,7 @@ If the working directory has an `AGENTS.md`, `CLAUDE.md`, or `.iagent.md`, it is
 ```
 Sources/iAgent/
   main.swift               CLI flags, REPL, slash commands, one-shot mode
+  LineEditor.swift         interactive prompt: line editing, history, / command menu
   Agent.swift              agent loop (model → tools → model …), system prompt, stream renderer
   Config.swift             presets, config file / env / flag resolution
   Models.swift             message types, provider protocol, HTTP+SSE helpers with retry
