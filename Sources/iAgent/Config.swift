@@ -17,6 +17,7 @@ let presets: [String: Preset] = [
     "openrouter": Preset(kind: .openai, baseURL: "https://openrouter.ai/api/v1", keyEnv: "OPENROUTER_API_KEY", defaultModel: nil),
     "ollama": Preset(kind: .openai, baseURL: "http://localhost:11434/v1", keyEnv: nil, defaultModel: nil),
     "lmstudio": Preset(kind: .openai, baseURL: "http://localhost:1234/v1", keyEnv: nil, defaultModel: nil),
+    "mlx": Preset(kind: .openai, baseURL: "http://localhost:8080/v1", keyEnv: nil, defaultModel: nil),
 ]
 
 /// Resolution order (later wins): preset defaults < ~/.iagent/config.json < IAGENT_* env vars < CLI flags.

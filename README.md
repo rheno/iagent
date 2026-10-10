@@ -111,6 +111,50 @@ or `IAGENT_LOCAL_ONLY=1`. In this mode:
 - `bash` runs in a macOS sandbox. It can't connect to anything but localhost, resolve DNS names, open apps or URLs, or
   send Apple Events. Builds, git, and tests that don't need the network work normally.
 
+## Running offline with a local model
+
+1. Install a local model server and download a model while you still have internet:
+
+   ```bash
+   brew install ollama
+   ollama serve &                 # listens on http://localhost:11434
+   ollama pull qwen3-coder
+   ```
+
+   Or use LM Studio: download and load a model, then start its local server (`http://localhost:1234/v1`).
+
+   Or use [mlx-lm](https://github.com/ml-explore/mlx-lm) (Apple Silicon only, runs on the GPU through MLX):
+
+   ```bash
+   pipx install mlx-lm            # or: pip install mlx-lm
+   mlx_lm.server --model mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit   # http://localhost:8080/v1
+   ```
+
+   The model downloads from Hugging Face on first start and is cached in `~/.cache/huggingface`. After that it works offline.
+   The server is local, but keep it bound to `127.0.0.1` (the default); `--local` refuses it otherwise.
+
+2. Start iAgent in local-only mode:
+
+   ```bash
+   iagent --local -m qwen3-coder                  # Ollama
+   iagent --local --provider lmstudio -m <loaded-model>
+   iagent --local --provider mlx -m mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit
+   ```
+
+   Once the model is downloaded, no internet is needed.
+
+3. To make this the default, add a profile to `~/.iagent/config.json`:
+
+   ```json
+   { "profile": "local",
+     "profiles": { "local": { "provider": "ollama", "model": "qwen3-coder", "localOnly": true } } }
+   ```
+
+   For mlx-lm use `{ "provider": "mlx", "model": "<the model id you passed to mlx_lm.server>", "localOnly": true }`.
+   Then plain `iagent` runs offline. Use `IAGENT_PROFILE=<name>` to pick another profile for one run.
+
+Small models may struggle with the full tool list. Add `--no-apple` to drop the Apple device tools.
+
 ## Choosing a model
 
 | Provider | Command | Key env var |
@@ -120,6 +164,7 @@ or `IAGENT_LOCAL_ONLY=1`. In this mode:
 | OpenRouter | `iagent --provider openrouter -m qwen/qwen3-coder` | `OPENROUTER_API_KEY` |
 | Ollama | `iagent --provider ollama -m qwen3-coder` | – |
 | LM Studio | `iagent --provider lmstudio -m <loaded-model>` | – |
+| mlx-lm | `iagent --provider mlx -m <model-id>` | – |
 | Any OpenAI-compatible | `iagent --base-url http://host:8000/v1 -m <id> --api-key-env MY_KEY` | your choice |
 | Anthropic-compatible gateway | `iagent --base-url https://gw.example.com --kind anthropic -m <id>` | `ANTHROPIC_API_KEY` |
 

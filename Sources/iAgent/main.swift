@@ -16,7 +16,7 @@ USAGE
   echo "prompt" | iagent [options]   one-shot from stdin
 
 OPTIONS
-  --provider <name>     anthropic | openai | openrouter | ollama | lmstudio (default: autodetect from API key env vars)
+  --provider <name>     anthropic | openai | openrouter | ollama | lmstudio | mlx (default: autodetect from API key env vars)
   -m, --model <id>      model id, e.g. claude-opus-5-5, gpt-5, qwen3-coder, anthropic/claude-sonnet-5-5
   --base-url <url>      any OpenAI-compatible endpoint (e.g. http://localhost:8000/v1)
   --kind <openai|anthropic>  API dialect for a custom --base-url (default: openai)
