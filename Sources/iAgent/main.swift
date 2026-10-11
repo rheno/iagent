@@ -1,6 +1,6 @@
 import Foundation
 
-let version = "0.2.0"
+let version = "0.3.0"
 
 // Internal helper mode: the `airdrop` tool re-launches this binary to host the AppKit sharing UI.
 if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == AirDropHelper.flag {
