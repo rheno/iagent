@@ -178,7 +178,7 @@ final class LineEditor {
         isatty(STDIN_FILENO) != 0 && isatty(STDOUT_FILENO) != 0 && ProcessInfo.processInfo.environment["TERM"] != "dumb"
     }
 
-    private enum Key {
+    enum Key: Equatable {
         case text(String), paste(String), enter, newline, backspace, delete, left, right, up, down, home, end
         case wordLeft, wordRight, deleteWord, killEnd, killStart, tab, escape, ctrlC, ctrlD, clearScreen, ignore
     }
@@ -307,12 +307,14 @@ final class LineEditor {
             cc[Int(VTIME)] = 0
         }
         guard tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0 else { return false }
-        write("\u{1B}[?2004h")   // bracketed paste: a pasted newline must not submit
+        // Bracketed paste, so a pasted newline can't submit; and our own kitty keyboard mode (disambiguate only), so
+        // Shift-Enter is reported and a mode another program left on can't turn plain keys like Space into CSI u.
+        write("\u{1B}[?2004h\u{1B}[>1u")
         return true
     }
 
     private func disableRawMode() {
-        write("\u{1B}[?2004l")
+        write("\u{1B}[<u\u{1B}[?2004l")
         tcsetattr(STDIN_FILENO, TCSANOW, &saved)
     }
 
@@ -335,6 +337,14 @@ final class LineEditor {
     private func readKey() -> Key? {
         guard let b = readByte() else { return nil }
         switch b {
+        case 0x1B: return readEscape()
+        case 0x20..<0x7F, 0x80...: return .text(readUTF8(lead: b))
+        default: return Self.controlKey(b)
+        }
+    }
+
+    static func controlKey(_ b: UInt8) -> Key {
+        switch b {
         case 0x0D: return .enter
         case 0x0A: return .newline                 // Ctrl-J
         case 0x7F, 0x08: return .backspace
@@ -351,10 +361,51 @@ final class LineEditor {
         case 0x03: return .ctrlC
         case 0x04: return .ctrlD
         case 0x0C: return .clearScreen
-        case 0x1B: return readEscape()
-        case ..<0x20: return .ignore
-        default: return .text(readUTF8(lead: b))
+        case 0x1B: return .escape
+        default: return .ignore
         }
+    }
+
+    /// A key sent as `CSI code[:alts];mods[:event][;text] u` (kitty keyboard protocol) or `CSI 27;mods;code ~`
+    /// (xterm modifyOtherKeys), which Ghostty, kitty, WezTerm and iTerm2 use when a program asks for them.
+    static func encodedKey(_ seq: String) -> Key? {
+        var fields: [Substring]
+        if seq.hasSuffix("u") {
+            fields = seq.dropLast().split(separator: ";", omittingEmptySubsequences: false)
+        } else if seq.hasPrefix("27;"), seq.hasSuffix("~") {
+            fields = seq.dropFirst(3).dropLast().split(separator: ";", omittingEmptySubsequences: false)
+            guard fields.count == 2 else { return nil }
+            fields.swapAt(0, 1)
+        } else { return nil }
+        guard let code = fields[0].split(separator: ":").first.flatMap({ UInt32($0) }), let scalar = UnicodeScalar(code)
+        else { return nil }
+        let modField = fields.count > 1 ? fields[1].split(separator: ":", omittingEmptySubsequences: false) : []
+        if modField.count > 1, modField[1] == "3" { return .ignore }   // key release
+        let mods = (modField.first.flatMap { Int($0) } ?? 1) - 1
+        let shift = mods & 1 != 0, alt = mods & 2 != 0, ctrl = mods & 4 != 0, other = mods & 0x38 != 0
+        switch code {
+        case 13: return shift || alt ? .newline : .enter
+        case 9: return .tab
+        case 8, 127: return alt ? .deleteWord : .backspace
+        case 27: return .escape
+        case 0xE000...0xF8FF: return .ignore                     // function and media keys
+        default: break
+        }
+        if ctrl || alt || other {
+            let lower = Character(scalar).lowercased()
+            switch (ctrl, alt, other) {
+            case (true, false, false) where ("a"..."z").contains(lower): return controlKey(UInt8(code | 0x20) & 0x1F)
+            case (false, true, false) where lower == "b": return .wordLeft
+            case (false, true, false) where lower == "f": return .wordRight
+            default: return .ignore
+            }
+        }
+        if fields.count > 2 {                                      // the text the key produces, when reported
+            let text = String(String.UnicodeScalarView(fields[2].split(separator: ":").compactMap { UInt32($0).flatMap(UnicodeScalar.init) }))
+            if !text.isEmpty { return .text(text) }
+        }
+        guard code >= 0x20 else { return .ignore }
+        return .text(shift ? Character(scalar).uppercased() : String(scalar))
     }
 
     private func readUTF8(lead: UInt8) -> String {
@@ -383,9 +434,8 @@ final class LineEditor {
             case "3~": return .delete
             case "1;3C", "1;5C", "1;9C": return .wordRight
             case "1;3D", "1;5D", "1;9D": return .wordLeft
-            case "13;2u": return .newline          // Shift-Enter (CSI u terminals)
             case "200~": return .paste(readPaste())
-            default: return .ignore
+            default: return Self.encodedKey(seq) ?? .ignore
             }
         case UInt8(ascii: "O"):
             switch readByte(timeoutMs: 40) {

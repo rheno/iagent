@@ -89,4 +89,18 @@ import Testing
         let l = PromptLayout.make(LineBuffer("中文\u{1B}[2J"), width: 40, prompt: "> ", continuation: ". ")
         #expect(l.rows == ["> 中文?[2J"] && l.cursorCol == 10)
     }
+
+    @Test func decodesKeysSentAsCSIu() {
+        typealias K = LineEditor.Key
+        #expect(LineEditor.encodedKey("32u") == K.text(" "))               // Space under "report all keys"
+        #expect(LineEditor.encodedKey("27;1;32~") == K.text(" "))          // xterm modifyOtherKeys
+        #expect(LineEditor.encodedKey("97;2u") == K.text("A"))
+        #expect(LineEditor.encodedKey("97;2;65u") == K.text("A"))          // with the reported text
+        #expect(LineEditor.encodedKey("97;1:3u") == K.ignore)              // key release
+        #expect(LineEditor.encodedKey("13u") == K.enter && LineEditor.encodedKey("13;2u") == K.newline)
+        #expect(LineEditor.encodedKey("127u") == K.backspace && LineEditor.encodedKey("127;3u") == K.deleteWord)
+        #expect(LineEditor.encodedKey("99;5u") == K.ctrlC && LineEditor.encodedKey("100;5u") == K.ctrlD)
+        #expect(LineEditor.encodedKey("98;3u") == K.wordLeft && LineEditor.encodedKey("27u") == K.escape)
+        #expect(LineEditor.encodedKey("57399u") == K.ignore && LineEditor.encodedKey("200~") == nil)
+    }
 }
