@@ -12,7 +12,7 @@ A Claude-Code-style terminal agent written in Swift, with no third-party depende
 The coding tools are `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`, and `web_fetch`. Before it runs a command, changes a file, contacts a new web host, or touches anything outside the project, you're asked to approve the call (`y` / `a`lways / `n` / type feedback). Secret files and outgoing messages need confirmation every time, even with `--yolo`. See [SECURITY.md](SECURITY.md) for the full security model.
 
 <p align="center">
-  <img src="assets/screenshot-session.png" width="820" alt="iAgent session: scanning Apple devices, then asking for approval before adding a reminder">
+  <img src="assets/screenshot-session.png" width="820" alt="iAgent session: bumping a version with an approved edit, refusing to read .env, and asking before adding a reminder">
 </p>
 
 ## Apple ecosystem
