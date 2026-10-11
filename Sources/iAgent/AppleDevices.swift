@@ -273,7 +273,17 @@ extension AppleTools {
             "filter": ["type": "string", "description": "syslog: only lines containing this text"],
             "args": ["type": "array", "items": ["type": "string"], "description": "raw: arguments after `xcrun devicectl`"],
         ]),
-        approval: { args, _ in ["list", "info", "apps", "processes"].contains(action(args)) ? .none : .ask },
+        // Paths on this Mac follow the read_file/write_file rules: secret files stay blocked, outside paths are scoped.
+        approval: { args, ctx in
+            switch action(args) {
+            case "list", "info", "apps", "processes": return .none
+            case "copy_to", "install":
+                return .strictest(.ask, PathPolicy.readApproval(args[action(args) == "install" ? "path" : "source"] as? String, ctx))
+            case "copy_from": return .strictest(.ask, PathPolicy.writeApproval(args["destination"] as? String, ctx))
+            case "screenshot": return (args["path"] as? String).map { .strictest(.ask, PathPolicy.writeApproval($0, ctx)) } ?? .ask
+            default: return .ask
+            }
+        },
         summary: summarize(["bundle_id", "path", "device"]),
         run: { args, ctx in
             let act = action(args)
@@ -385,7 +395,16 @@ extension AppleTools {
             "latitude": ["type": "number"], "longitude": ["type": "number"],
             "args": ["type": "array", "items": ["type": "string"]],
         ]),
-        approval: { args, _ in ["install", "uninstall", "raw"].contains(action(args)) ? .ask : .none },
+        approval: { args, ctx in
+            switch action(args) {
+            case "list": return .none
+            // A simulator has the Mac's network: each URL is approved on its own, like a fetch.
+            case "openurl": return .askScoped("url " + (args["url"] as? String ?? ""))
+            case "install": return .strictest(.ask, PathPolicy.readApproval(args["path"] as? String, ctx))
+            case "screenshot": return (args["path"] as? String).map { .strictest(.ask, PathPolicy.writeApproval($0, ctx)) } ?? .ask
+            default: return .ask
+            }
+        },
         summary: summarize(["bundle_id", "url", "device"]),
         run: { args, ctx in
             guard await ToolAvailability.shared.has("simctl") else {

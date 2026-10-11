@@ -372,7 +372,7 @@ extension AppleTools {
         ], required: ["to"]),
         approval: { _, _ in .sensitive("sends a message to another person on your behalf") },
         summary: { "to: \(($0["to"] as? String) ?? "?")" },
-        preview: { args in
+        preview: { args, _ in
             var s = Style.yellow("    To: \(args["to"] as? String ?? "?") via \(args["service"] as? String ?? "imessage")")
             if let t = args["text"] as? String { s += "\n" + t.components(separatedBy: "\n").map { Style.yellow("    │ " + $0) }.joined(separator: "\n") }
             if let f = args["file"] as? String { s += "\n" + Style.yellow("    📎 \(f)") }

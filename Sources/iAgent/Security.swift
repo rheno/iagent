@@ -56,10 +56,11 @@ enum PathPolicy {
     /// writing them can plant persistence. Both always need explicit confirmation.
     private static let sensitiveComponents: Set<String> = [
         ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".gcloud", ".config/gcloud", "Keychains",
-        ".password-store", ".iagent",
+        ".password-store", ".iagent", ".config/gh",
     ]
     private static let sensitiveNames: Set<String> = [
         ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".pgpass", ".my.cnf", "credentials", "credentials.json",
+        "credentials.toml", ".credentials.json", ".vault-token", ".envrc",
         "id_rsa", "id_ecdsa", "id_ed25519", "id_dsa", "authorized_keys", "known_hosts",
         ".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", "sudoers",
     ]
@@ -90,6 +91,26 @@ enum PathPolicy {
 
     private static let LaunchAgentDirs = ["/Library/LaunchAgents/", "/Library/LaunchDaemons/"]
 
+    /// Files that run code later (login shells, git hooks and config such as core.hooksPath or core.fsmonitor).
+    /// Fine to read; writing one would turn a file edit into a command that runs without a bash approval.
+    private static let persistenceNames: Set<String> = [".zlogin", ".zlogout", ".bash_login", ".bash_logout", ".gitconfig"]
+    private static let persistenceDirs = ["/.git/hooks/", "/.config/git/", "/.config/fish/"]
+
+    static func runsCodeLater(_ url: URL) -> Bool {
+        let path = canonical(url).path
+        let name = (path as NSString).lastPathComponent
+        return persistenceNames.contains(name) || path.hasSuffix("/.git/config") || path.hasSuffix("/.git/hooks")
+            || persistenceDirs.contains { path.contains($0) }
+    }
+
+    /// Scope for "always" outside the project: one directory, never the whole filesystem.
+    private static func outsideScope(_ url: URL) -> Approval {
+        var isDir: ObjCBool = false
+        let c = canonical(url)
+        let dir = FileManager.default.fileExists(atPath: c.path, isDirectory: &isDir) && isDir.boolValue ? c : c.deletingLastPathComponent()
+        return .askScoped("outside working dir: \(dir.path)")
+    }
+
     static func zone(_ url: URL, cwd: URL) -> Zone {
         if isSensitive(url) { return .sensitive }
         let path = canonical(url).path
@@ -101,18 +122,20 @@ enum PathPolicy {
     static func readApproval(_ path: String?, _ ctx: ToolContext) -> Approval {
         switch zone(ctx.resolve(path ?? "."), cwd: ctx.cwd) {
         case .inside: return .none
-        case .outside: return .askScoped("outside working dir")
+        case .outside: return outsideScope(ctx.resolve(path ?? "."))
         case .sensitive:
             // A cloud model provider must never receive a secret file; a model on this Mac may, with confirmation.
             return ctx.localOnly ? .sensitive("reads a credential/secret file")
-                : .blocked("\(path ?? "") is a credential/secret file. Its contents are never sent to a cloud model provider; run iagent --local with a local model to work with it")
+                : .blocked("\(Sanitize.terminal(path ?? "")) is a credential/secret file. Its contents are never sent to a cloud model provider; run iagent --local with a local model to work with it")
         }
     }
 
     static func writeApproval(_ path: String?, _ ctx: ToolContext) -> Approval {
-        switch zone(ctx.resolve(path ?? "."), cwd: ctx.cwd) {
+        let url = ctx.resolve(path ?? ".")
+        if runsCodeLater(url) { return .sensitive("modifies a file that runs code later (git hook/config, login shell)") }
+        switch zone(url, cwd: ctx.cwd) {
         case .inside: return .ask
-        case .outside: return .askScoped("outside working dir")
+        case .outside: return outsideScope(url)
         case .sensitive: return .sensitive("modifies a credential, shell-startup or persistence file")
         }
     }

@@ -11,6 +11,22 @@ enum Approval: Equatable {
     case sensitive(String)
     /// Never runs, whatever the user or --yolo says. The reason is sent back to the model.
     case blocked(String)
+
+    private var rank: Int {
+        switch self {
+        case .none: 0
+        case .ask: 1
+        case .askScoped: 2
+        case .sensitive: 3
+        case .blocked: 4
+        }
+    }
+
+    /// The stricter of two approvals; two scopes combine so "always" covers only that exact pair.
+    static func strictest(_ a: Approval, _ b: Approval) -> Approval {
+        if case .askScoped(let x) = a, case .askScoped(let y) = b { return .askScoped(x == y ? x : "\(x); \(y)") }
+        return a.rank >= b.rank ? a : b
+    }
 }
 
 struct Tool {
@@ -21,8 +37,8 @@ struct Tool {
     let approval: ([String: Any], ToolContext) -> Approval
     /// One-line summary shown in the transcript, e.g. `bash(ls -la)`.
     let summary: ([String: Any]) -> String
-    /// Extra detail shown in the permission prompt.
-    var preview: (([String: Any]) -> String)? = nil
+    /// Extra detail shown in the permission prompt. Without one, the prompt lists every argument.
+    var preview: (([String: Any], ToolContext) -> String)? = nil
     let run: ([String: Any], ToolContext) async throws -> String
 }
 
@@ -36,26 +52,24 @@ final class Permissions {
     /// Returns nil when allowed, or the reason it was refused (sent back to the model).
     /// `key` identifies what "always" applies to, e.g. `bash` or `reminders.add`.
     func check(key baseKey: String, level: Approval, preview: String) -> String? {
-        var key = baseKey
+        let key = Self.alwaysKey(baseKey, level)
         var reason: String?
         switch level {
         case .none: return nil
-        case .ask: if autoApprove || alwaysAllowed.contains(key) { return nil }
-        case .askScoped(let scope):
-            key = "\(baseKey) [\(Sanitize.terminal(scope))]"
-            if autoApprove || alwaysAllowed.contains(key) { return nil }
+        case .ask, .askScoped: if autoApprove || alwaysAllowed.contains(key) { return nil }
         case .sensitive(let why): reason = why
         case .blocked(let why): return "Blocked: \(why)."
         }
+        let shownKey = Self.displayKey(baseKey, level)
         guard interactive else {
-            return reason.map { "Permission denied: '\(key)' always needs interactive confirmation because it \($0)." }
-                ?? "Permission denied: '\(key)' needs approval but the session is non-interactive (run with --yolo to allow)."
+            return reason.map { "Permission denied: '\(shownKey)' always needs interactive confirmation because it \($0)." }
+                ?? "Permission denied: '\(shownKey)' needs approval but the session is non-interactive (run with --yolo to allow)."
         }
         if !preview.isEmpty { emit(preview + "\n") }
         if let reason { emit(Style.red("  ⚠  This \(reason). Confirmation is required every time.") + "\n") }
         let options = reason != nil ? "[y]es / [n]o, or type feedback: " : "[y]es / [a]lways for this session / [n]o, or type feedback: "
         while true {
-            emit(Style.yellow("  Allow \(key)? ") + Style.dim(options))
+            emit(Style.yellow("  Allow \(shownKey)? ") + Style.dim(options))
             guard let line = readLine() else { return "User denied permission." }
             let answer = line.trimmingCharacters(in: .whitespaces)
             switch answer.lowercased() {
@@ -68,6 +82,20 @@ final class Permissions {
             default: return "User denied this tool call with feedback: \(answer)"
             }
         }
+    }
+
+    /// What "always" remembers: the tool/action, plus the whole scope (an exact command, script, URL or directory),
+    /// so approving one long command never approves another that merely starts the same way.
+    static func alwaysKey(_ base: String, _ level: Approval) -> String {
+        if case .askScoped(let scope) = level { return "\(base) [\(scope)]" }
+        return base
+    }
+
+    /// The same, made safe and short enough to print in the prompt.
+    static func displayKey(_ base: String, _ level: Approval) -> String {
+        guard case .askScoped(let scope) = level else { return base }
+        let flat = Sanitize.terminal(scope).replacingOccurrences(of: "\n", with: " ⏎ ")
+        return "\(base) [\(flat.count > 160 ? String(flat.prefix(160)) + "…" : flat)]"
     }
 }
 
@@ -179,8 +207,9 @@ enum Toolbox {
         if ctx.localOnly && (LocalOnly.removedTools.contains(tool.name) || LocalOnly.blockedActions.contains(key)) {
             level = .blocked("\(key) can send data off this Mac, so it is disabled in local-only mode")
         }
-        if let denied = ctx.permissions.check(key: key, level: level, preview: tool.preview?(shownArgs) ?? "") {
-            emit(Style.red("  ⎿  \(denied)\n"))
+        let preview = level == .none ? "" : tool.preview?(shownArgs, ctx) ?? argumentPreview(shownArgs)
+        if let denied = ctx.permissions.check(key: key, level: level, preview: preview) {
+            emit(Style.red("  ⎿  \(Sanitize.terminal(denied))\n"))
             return (denied, true)
         }
         do {
@@ -195,6 +224,30 @@ enum Toolbox {
             emit(Style.red("  ⎿  \(Sanitize.terminal(String(msg.prefix(300))))\n"))
             return (redacted(msg), true)
         }
+    }
+
+    /// Every argument of the call, so a prompt can't approve a value the one-line summary left out.
+    static func argumentPreview(_ shownArgs: [String: Any]) -> String {
+        shownArgs.filter { $0.key != "action" }.sorted { $0.key < $1.key }.map { key, value in
+            let text = (value as? [Any]).map { $0.map { "\($0)" }.joined(separator: ", ") } ?? "\(value)"
+            return Style.yellow("    \(key): " + text.replacingOccurrences(of: "\n", with: "\n      "))
+        }.joined(separator: "\n")
+    }
+
+    /// The changed region between two versions of a file: the lines removed and added, up to 40 of each.
+    static func diffPreview(old: [String], new: [String]) -> String {
+        var start = 0
+        while start < old.count, start < new.count, old[start] == new[start] { start += 1 }
+        var end = 0
+        while end < old.count - start, end < new.count - start, old[old.count - 1 - end] == new[new.count - 1 - end] { end += 1 }
+        let removed = old[start..<(old.count - end)], added = new[start..<(new.count - end)]
+        if removed.isEmpty && added.isEmpty { return Style.dim("    (content unchanged)") }
+        var lines = old.isEmpty ? [] : [Style.dim("    @@ line \(start + 1)")]
+        lines += removed.prefix(40).map { Style.red("    - " + $0) }
+        if removed.count > 40 { lines.append(Style.dim("    … \(removed.count - 40) more removed lines")) }
+        lines += added.prefix(40).map { Style.green("    + " + $0) }
+        if added.count > 40 { lines.append(Style.dim("    … \(added.count - 40) more added lines")) }
+        return lines.joined(separator: "\n")
     }
 
     /// Tool output goes to the model provider: mask any secrets in it first and tell the user.
@@ -248,11 +301,15 @@ enum Toolbox {
         ], required: ["path", "content"]),
         approval: { args, ctx in PathPolicy.writeApproval(args["path"] as? String, ctx) },
         summary: { ($0["path"] as? String) ?? "" },
-        preview: { args in
-            let content = args["content"] as? String ?? ""
-            let lines = content.components(separatedBy: "\n")
-            let body = lines.prefix(20).map { Style.green("    + " + $0) }.joined(separator: "\n")
-            return body + (lines.count > 20 ? Style.dim("\n    … \(lines.count - 20) more lines") : "")
+        // An overwrite shows what changes, not just the new text.
+        preview: { args, ctx in
+            let new = (args["content"] as? String ?? "").components(separatedBy: "\n")
+            let url = ctx.resolve(args["path"] as? String ?? "")
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            guard size <= 2_000_000, let existing = try? String(contentsOf: url, encoding: .utf8) else {
+                return diffPreview(old: [], new: new)
+            }
+            return diffPreview(old: Sanitize.terminal(existing).components(separatedBy: "\n"), new: new)
         },
         run: { args, ctx in
             let url = ctx.resolve(try str(args, "path"))
@@ -277,7 +334,7 @@ enum Toolbox {
         ], required: ["path", "old_string", "new_string"]),
         approval: { args, ctx in PathPolicy.writeApproval(args["path"] as? String, ctx) },
         summary: { ($0["path"] as? String) ?? "" },
-        preview: { args in
+        preview: { args, _ in
             let old = (args["old_string"] as? String ?? "").components(separatedBy: "\n")
             let new = (args["new_string"] as? String ?? "").components(separatedBy: "\n")
             var lines = old.prefix(40).map { Style.red("    - " + $0) }
@@ -400,14 +457,14 @@ enum Toolbox {
             "command": ["type": "string", "description": "Shell command to execute"],
             "timeout": ["type": "integer", "description": "Timeout in seconds"],
         ], required: ["command"]),
-        approval: { args, _ in .askScoped("command: " + String((args["command"] as? String ?? "").prefix(200))) },
+        approval: { args, _ in .askScoped("command: " + (args["command"] as? String ?? "")) },
         summary: { args in
             let c = (args["command"] as? String ?? "").replacingOccurrences(of: "\n", with: " ⏎ ")
             return c.count > 120 ? String(c.prefix(120)) + "…" : c
         },
-        preview: { args in
+        preview: { args, _ in
             let c = args["command"] as? String ?? ""
-            guard c.count > 120 || c.contains("\n") || c != (args["command"] as? String ?? "") else { return "" }
+            guard c.count > 120 || c.contains("\n") else { return "" }
             return c.components(separatedBy: "\n").map { Style.yellow("    $ " + $0) }.joined(separator: "\n")
         },
         run: { args, ctx in

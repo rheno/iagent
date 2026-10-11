@@ -15,7 +15,11 @@ extension AppleTools {
             "input": ["type": "string", "description": "Text input for the shortcut"],
             "input_path": ["type": "string", "description": "File to pass as input"],
         ]),
-        approval: { args, _ in action(args) == "list" ? .none : .ask },
+        approval: { args, ctx in
+            guard action(args) != "list" else { return .none }
+            let run = Approval.askScoped("shortcut " + (args["name"] as? String ?? ""))
+            return (args["input_path"] as? String).map { .strictest(run, PathPolicy.readApproval($0, ctx)) } ?? run
+        },
         summary: summarize(["name", "folder"]),
         run: { args, ctx in
             switch action(args) {
@@ -72,10 +76,13 @@ extension AppleTools {
             "target": ["type": "string"], "app": ["type": "string"], "path": ["type": "string"],
             "level": ["type": "integer"], "mode": ["type": "string", "enum": ["on", "off", "toggle"]],
         ]),
-        approval: { args, _ in
+        approval: { args, ctx in
             switch action(args) {
             case "notify", "say", "battery", "wifi", "apps", "now_playing": return .none
             case "volume": return args["level"] == nil ? .none : .ask
+            // Opening runs apps and scripts and can carry data out in a URL: "always" covers one exact target.
+            case "open": return .askScoped("open " + (args["target"] as? String ?? "") + ((args["app"] as? String).map { " with " + $0 } ?? ""))
+            case "screenshot": return (args["path"] as? String).map { .strictest(.ask, PathPolicy.writeApproval($0, ctx)) } ?? .ask
             default: return .ask
             }
         },
@@ -170,12 +177,16 @@ extension AppleTools {
             "language": ["type": "string", "enum": ["applescript", "javascript"], "description": "Default applescript"],
             "args": ["type": "array", "items": ["type": "string"]],
         ], required: ["script"]),
-        approval: { _, _ in .ask },
+        // A script can do anything bash can (`do shell script`), so "always" covers one exact script and arguments.
+        approval: { args, _ in
+            let argv = args["args"] as? [String] ?? []
+            return .askScoped("script: " + (args["script"] as? String ?? "") + (argv.isEmpty ? "" : " args: \(argv)"))
+        },
         summary: { args in
             let s = (args["script"] as? String ?? "").replacingOccurrences(of: "\n", with: " ⏎ ")
             return s.count > 100 ? String(s.prefix(100)) + "…" : s
         },
-        preview: { args in
+        preview: { args, _ in
             (args["script"] as? String ?? "").components(separatedBy: "\n").map { Style.yellow("    " + $0) }.joined(separator: "\n")
         },
         run: { args, _ in

