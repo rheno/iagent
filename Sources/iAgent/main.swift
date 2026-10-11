@@ -195,14 +195,15 @@ if let prompt = oneShot {
 
 // MARK: - Interactive REPL
 
-emit(Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.label) · \(provider.model)") + "\n")
-emit(Style.dim("  cwd: \(ctx.cwd.path)  — /help for commands") + "\n")
+var banner = [Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.label) · \(provider.model)"),
+              Style.dim("  cwd: \(ctx.cwd.path)  — /help for commands")]
 if config.localOnly {
-    emit(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network") + "\n")
+    banner.append(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network"))
 }
 if permissions.autoApprove {
-    emit(Style.yellow("  ⚠  --yolo: tool calls run without asking (secrets, outside-project writes and messages still ask)") + "\n")
+    banner.append(Style.yellow("  ⚠  --yolo: tool calls run without asking (secrets, outside-project writes and messages still ask)"))
 }
+Logo.banner(banner)
 emit("\n")
 
 let editor = LineEditor.isSupported ? LineEditor(commands: slashCommands) : nil

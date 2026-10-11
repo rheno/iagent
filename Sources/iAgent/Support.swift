@@ -25,6 +25,47 @@ func emit(_ s: String) {
     fflush(stdout)
 }
 
+/// The app icon from the binary's __TEXT,__iagent_icon section (see Package.swift), drawn beside the REPL banner.
+enum Logo {
+    static let rows = 3, textColumn = 9   // image height in rows; banner text starts this many columns in
+
+    /// Terminals that draw inline images via the kitty graphics protocol. Not through tmux/screen, which drop it.
+    static var supported: Bool {
+        let env = ProcessInfo.processInfo.environment
+        guard Style.enabled, env["TMUX"] == nil, !(env["TERM"] ?? "").hasPrefix("screen") else { return false }
+        return env["TERM_PROGRAM"] == "ghostty" || env["TERM"] == "xterm-kitty" || env["KITTY_WINDOW_ID"] != nil
+    }
+
+    static var png: Data? {
+        var size: UInt = 0
+        let header = #dsohandle.assumingMemoryBound(to: mach_header_64.self)
+        guard let p = getsectiondata(header, "__TEXT", "__iagent_icon", &size), size > 0 else { return nil }
+        return Data(bytes: p, count: Int(size))
+    }
+
+    /// Draws `png` at the cursor, `rows` tall, without moving the cursor. Payload goes in 4096-byte chunks.
+    static func kittyImage(_ png: Data) -> String {
+        let b64 = Array(png.base64EncodedString().utf8)
+        var out = "", i = 0
+        repeat {
+            let end = min(i + 4096, b64.count), more = end < b64.count ? 1 : 0
+            let control = i == 0 ? "a=T,f=100,r=\(rows),C=1,q=2,m=\(more)" : "m=\(more)"
+            out += "\u{1B}_G\(control);" + String(decoding: b64[i..<end], as: UTF8.self) + "\u{1B}\\"
+            i = end
+        } while i < b64.count
+        return out
+    }
+
+    /// Prints the banner lines, with the icon to their left when the terminal can draw it.
+    static func banner(_ lines: [String]) {
+        guard supported, let png else { emit(lines.map { $0 + "\n" }.joined()); return }
+        let lines = lines + Array(repeating: "", count: max(0, rows - lines.count))
+        // Make room first (scrolling if at the bottom), go back up, draw the image, then the text beside it.
+        emit(String(repeating: "\n", count: lines.count) + "\u{1B}[\(lines.count)A" + kittyImage(png)
+             + lines.map { "\u{1B}[\(textColumn)C" + $0 + "\n" }.joined())
+    }
+}
+
 func emitError(_ s: String) {
     fputs(Style.red(Sanitize.terminal(s)) + "\n", stderr)   // may contain server-provided text
 }
