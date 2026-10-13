@@ -50,7 +50,10 @@ scripts/build-release.sh   release build + hardened-runtime codesign → dist/ia
 assets/                    logos, app icon, README screenshot
 Sources/iAgent/
   main.swift               top-level script: flag parsing, config merge, --run-tool, one-shot mode, REPL + slash cmds (add new ones to `slashCommands` so /help and the menu list them)
-  LineEditor.swift         raw-mode prompt: LineBuffer editing, in-memory InputHistory, SlashCompletion menu, PromptLayout
+  LineEditor.swift         raw-mode prompt: LineBuffer editing, in-memory InputHistory, SlashCompletion menu, PromptLayout,
+                           framed input box with hint/status row, numbered permission menu (`choose`)
+  Render.swift             Claude Code–style output: Spinner (Apple Intelligence colors), MarkdownStream (⏺ replies),
+                           ToolDisplay (Read(…)/Update(…) names, "Read 42 lines" results); plain text when piped
   AppleFM.swift            Apple on-device model: starts/stops `fm serve` on 127.0.0.1:8642 (license/availability checks),
                            fits instructions/messages into its 4,096 tokens (`fm count-tokens`), apple_fm tool (`fm respond`)
   Config.swift             provider presets, ~/.iagent/config.json (with profiles) → IAGENT_* env → CLI flags; Keychain key
@@ -124,6 +127,7 @@ toolchain, so this is not a dependency) and `@testable import iAgent`:
 - `Tests/iAgentTests/ToolTests.swift`: coding-tool behavior, run in a temp `Sandbox` directory.
 - `Tests/iAgentTests/AppleFMTests.swift`: context fitting (counting injected, no model needed), `fm` schema
   conversion, apple_fm approvals.
+- `Tests/iAgentTests/RenderTests.swift`: markdown rendering and wrapping, tool result lines, spinner text.
 - `Tests/iAgentTests/LineEditorTests.swift`: prompt editing, history, `/` completion and wrapping (pure logic;
   the raw-terminal I/O is checked by hand in a real terminal).
 

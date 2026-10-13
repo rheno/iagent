@@ -67,6 +67,20 @@ final class Permissions {
         }
         if !preview.isEmpty { emit(preview + "\n") }
         if let reason { emit(Style.red("  ⚠  This \(reason). Confirmation is required every time.") + "\n") }
+        if LineEditor.isSupported {
+            var options = ["Yes"]
+            if reason == nil { options.append("Yes, and don't ask again for \(shownKey) this session") }
+            options.append("No, and tell iAgent what to do differently")
+            guard let choice = LineEditor(commands: []).choose("Allow \(shownKey)?", options: options) else {
+                Interrupter.shared.interruptTurn()
+                return "Interrupted by user before this tool ran."
+            }
+            if choice == 0 { return nil }
+            if choice == 1 && reason == nil { alwaysAllowed.insert(key); return nil }
+            emit(Style.yellow("  What should iAgent do instead? ") + Style.dim("(Enter to just say no) "))
+            let feedback = (Self.readAnswer() ?? "").trimmingCharacters(in: .whitespaces)
+            return feedback.isEmpty ? "User denied permission for this tool call." : "User denied this tool call with feedback: \(feedback)"
+        }
         let options = reason != nil ? "[y]es / [n]o, or type feedback: " : "[y]es / [a]lways for this session / [n]o, or type feedback: "
         while true {
             emit(Style.yellow("  Allow \(shownKey)? ") + Style.dim(options))
@@ -217,7 +231,8 @@ enum Toolbox {
         }
 
         let shownArgs = Sanitize.displayArgs(args)
-        emit(Style.cyan("⏺ ") + Style.bold(tool.name) + Style.dim("(\(tool.summary(shownArgs)))") + "\n")
+        let summary = tool.summary(shownArgs)
+        emit(Style.green("⏺ ") + Style.bold(ToolDisplay.name(tool.name)) + (summary.isEmpty ? "" : "(\(summary))") + "\n")
         let key = (shownArgs["action"] as? String).map { "\(tool.name).\($0)" } ?? tool.name
         var level = tool.approval(args, ctx)
         if ctx.localOnly && (LocalOnly.removedTools.contains(tool.name) || LocalOnly.blockedActions.contains(key)) {
@@ -229,7 +244,12 @@ enum Toolbox {
             return (denied, true)
         }
         do {
+            Spinner.shared.start("Running")
             let out = try await tool.run(args, ctx)
+            if Style.enabled, let line = ToolDisplay.result(tool.name, out) {
+                emit(Style.dim("  ⎿  " + line) + "\n")
+                return (truncate(redacted(out)), false)
+            }
             let lines = Sanitize.terminal(out).split(separator: "\n", omittingEmptySubsequences: false)
             let shown = lines.prefix(3).map { "     " + String($0.prefix(160)) }.joined(separator: "\n")
             let more = lines.count > 3 ? "\n     … +\(lines.count - 3) lines" : ""

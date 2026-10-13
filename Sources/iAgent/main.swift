@@ -263,6 +263,9 @@ var pending: String? = positional.isEmpty ? nil : positional.joined(separator: "
 if let pending { editor?.history.add(pending) }
 
 while true {
+    if let editor {
+        editor.status = usesAppleFM ? "on-device · \(max(agent.contextUsed, fmBaseTokens)) / \(AppleFM.contextSize) tokens" : provider.model
+    }
     guard let raw = pending ?? readInput() else { emit("\n"); break }
     pending = nil
     let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -304,8 +307,11 @@ while true {
     _ = await runTurn(input)
     if usesAppleFM && agent.contextUsed > 0 {
         let line = "  context: \(agent.contextUsed) / \(AppleFM.contextSize) tokens"
-        emit(agent.contextUsed * 4 > AppleFM.contextSize * 3
-             ? Style.yellow(line + " — nearly full, /clear starts a fresh conversation") + "\n" : Style.dim(line) + "\n")
+        if agent.contextUsed * 4 > AppleFM.contextSize * 3 {
+            emit(Style.yellow(line + " — nearly full, /clear starts a fresh conversation") + "\n")
+        } else if editor == nil {
+            emit(Style.dim(line) + "\n")   // otherwise the status row under the input box shows it
+        }
     }
     emit("\n")
 }

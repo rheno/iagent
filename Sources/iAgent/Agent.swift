@@ -48,6 +48,7 @@ final class Agent {
         for iteration in 0..<maxIterations {
             try Task.checkCancellation()
             let renderer = StreamRenderer(afterToolOutput: iteration > 0)
+            Spinner.shared.start("Thinking")
             let turn: AssistantTurn
             do {
                 turn = try await provider.complete(system: system, messages: history, tools: tools,
@@ -249,13 +250,18 @@ final class Agent {
     }
 }
 
-/// Streams thinking (dimmed) and answer text to the terminal as they arrive.
+/// Streams the reply to the terminal. In a color terminal (Claude Code style): thinking stays behind the working
+/// indicator and is summed up as "Thought for 4s", and the answer is rendered as markdown under a ⏺ bullet. Piped
+/// output gets the raw text, with thinking dimmed.
 final class StreamRenderer {
     private var mode: Mode = .none
     private var atLineStart = true
     private enum Mode { case none, thinking, text }
     /// Separates the model's reply from the tool results printed just above it.
     private let afterToolOutput: Bool
+    private let rich = Style.enabled
+    private var markdown = MarkdownStream(width: terminalColumns())
+    private var thinkingStarted: Date?
 
     init(afterToolOutput: Bool = false) { self.afterToolOutput = afterToolOutput }
 
@@ -266,6 +272,21 @@ final class StreamRenderer {
 
     private func write(_ chunk: String, as newMode: Mode) {
         guard !chunk.isEmpty else { return }
+        let safe = Sanitize.terminal(chunk)   // model output may carry escape sequences from injected content
+        if rich {
+            if newMode == .thinking {
+                if thinkingStarted == nil { thinkingStarted = Date() }
+                return
+            }
+            if mode == .none {
+                reportThought()
+                if afterToolOutput { emit("\n") }
+            }
+            mode = .text
+            let out = markdown.feed(safe)
+            if !out.isEmpty { emit(out) }
+            return
+        }
         if newMode != mode {
             if !atLineStart { emit("\n") }
             if mode == .none && afterToolOutput { emit("\n") }
@@ -273,13 +294,31 @@ final class StreamRenderer {
             if newMode == .text && mode == .thinking { emit("\n") }
             mode = newMode
         }
-        let safe = Sanitize.terminal(chunk)   // model output may carry escape sequences from injected content
         emit(newMode == .thinking ? Style.dim(safe) : safe)
         atLineStart = chunk.hasSuffix("\n")
     }
 
+    private func reportThought() {
+        guard let start = thinkingStarted else { return }
+        thinkingStarted = nil
+        emit(Style.dim("✦ Thought for \(max(1, Int(Date().timeIntervalSince(start).rounded())))s") + "\n")
+    }
+
     func finish() {
+        if rich {
+            reportThought()
+            let out = markdown.flush()
+            if !out.isEmpty { emit(out) }
+            Spinner.shared.stop()
+            return
+        }
         if !atLineStart { emit("\n") }
         atLineStart = true
     }
+}
+
+/// The terminal's width in columns (80 when it can't be read).
+func terminalColumns() -> Int {
+    var ws = winsize()
+    return ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 ? Int(ws.ws_col) : 80
 }

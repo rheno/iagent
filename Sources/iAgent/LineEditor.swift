@@ -170,6 +170,8 @@ final class LineEditor {
     private var saved = termios()
     private var drawnCursorRow = 0
     static let menuSize = 8
+    /// Shown at the right of the hint row under the input box, e.g. the model and context use.
+    var status = ""
 
     init(commands: [SlashCommand]) { self.commands = commands }
 
@@ -196,7 +198,7 @@ final class LineEditor {
         }
         func finish(_ result: String?) -> String? {
             buf.cursor = buf.chars.count
-            draw(buf, menu: [], selected: 0, notice: nil)
+            draw(buf, menu: [], selected: 0, notice: nil, boxed: false)   // the input stays in the transcript, unframed
             write("\r\n")
             if let result { history.add(result) }
             return result
@@ -257,13 +259,68 @@ final class LineEditor {
         return finish(nil)
     }
 
+    // MARK: Choice menu
+
+    /// A Claude Code–style numbered menu under `question`, answered with ↑/↓ and Enter, a digit, or y/n (Esc picks
+    /// the last option). The menu is erased once answered. nil for Ctrl-C/Ctrl-D or end of input.
+    func choose(_ question: String, options: [String]) -> Int? {
+        guard !options.isEmpty, enableRawMode() else { return nil }
+        defer { disableRawMode() }
+        let width = terminalWidth()
+        func clip(_ s: String) -> String { s.count > width - 6 ? String(s.prefix(width - 7)) + "…" : s }
+        var selected = 0, drawn = 0
+        func draw(erase: Bool = false) {
+            var out = "\u{1B}[?25l" + (drawn > 0 ? "\u{1B}[\(drawn)A" : "") + "\r\u{1B}[J"
+            if erase {
+                write(out + "\u{1B}[?25h")
+                return
+            }
+            let rows = [Style.bold("  " + clip(question))] + options.enumerated().map { i, o in
+                i == selected ? Style.cyan(Style.bold("  ❯ \(i + 1).")) + " " + Style.cyan(clip(o)) : Style.dim("    \(i + 1).") + " " + clip(o)
+            }
+            out += rows.joined(separator: "\r\n")
+            drawn = rows.count - 1
+            write(out)
+        }
+        draw()
+        defer { draw(erase: true) }
+        while let key = readKey() {
+            switch key {
+            case .up: selected = (selected + options.count - 1) % options.count
+            case .down, .tab: selected = (selected + 1) % options.count
+            case .enter: return selected
+            case .escape: return options.count - 1
+            case .ctrlC, .ctrlD: return nil
+            case .text(let t):
+                if let n = Int(t), (1...options.count).contains(n) { return n - 1 }
+                switch t.lowercased() {
+                case "y": return 0
+                case "n": return options.count - 1
+                default: break
+                }
+            default: break
+            }
+            draw()
+        }
+        return nil
+    }
+
     // MARK: Drawing
 
     /// Redraws the prompt in place: back to its first row, clear below, write it all, then park the cursor.
-    private func draw(_ buf: LineBuffer, menu: [SlashCommand], selected: Int, notice: String?) {
+    /// `boxed`: framed by rules above and below (Claude Code style), with a hint and status row under it.
+    private func draw(_ buf: LineBuffer, menu: [SlashCommand], selected: Int, notice: String?, boxed: Bool = true) {
         let width = terminalWidth()
         let layout = PromptLayout.make(buf, width: width, prompt: Style.bold(Style.magenta("❯ ")), continuation: Style.dim("… "))
-        var rows = layout.rows
+        let rule = Style.dim(String(repeating: "─", count: width))
+        var rows = (boxed ? [rule] : []) + layout.rows
+        let top = boxed ? 1 : 0
+        if boxed {
+            rows.append(rule)
+            let hint = "  / commands · ↑ history · ⌥⏎ newline · ctrl-c exit"
+            let room = width - hint.count - status.count - 2
+            rows.append(Style.dim(room > 0 ? hint + String(repeating: " ", count: room) + status : "  " + status))
+        }
         if !menu.isEmpty {
             let sel = min(selected, menu.count - 1)
             let first = min(max(0, sel - Self.menuSize + 1), max(0, menu.count - Self.menuSize))
@@ -281,17 +338,14 @@ final class LineEditor {
         var out = "\u{1B}[?25l"
         if drawnCursorRow > 0 { out += "\u{1B}[\(drawnCursorRow)A" }
         out += "\r\u{1B}[J" + rows.joined(separator: "\r\n")
-        let up = rows.count - 1 - layout.cursorRow
+        let up = rows.count - 1 - (layout.cursorRow + top)
         if up > 0 { out += "\u{1B}[\(up)A" }
         out += "\r" + (layout.cursorCol > 0 ? "\u{1B}[\(layout.cursorCol)C" : "") + "\u{1B}[?25h"
-        drawnCursorRow = layout.cursorRow
+        drawnCursorRow = layout.cursorRow + top
         write(out)
     }
 
-    private func terminalWidth() -> Int {
-        var ws = winsize()
-        return ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 ? Int(ws.ws_col) : 80
-    }
+    private func terminalWidth() -> Int { terminalColumns() }
 
     private func write(_ s: String) { emit(s) }
 

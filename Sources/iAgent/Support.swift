@@ -11,6 +11,10 @@ enum Style {
 
     static func bold(_ s: String) -> String { wrap("1", s) }
     static func dim(_ s: String) -> String { wrap("2", s) }
+    static func italic(_ s: String) -> String { wrap("3", s) }
+    static func underline(_ s: String) -> String { wrap("4", s) }
+    /// Inline code and code blocks in replies: Apple's purple.
+    static func code(_ s: String) -> String { wrap("38;5;141", s) }
     static func red(_ s: String) -> String { wrap("31", s) }
     static func green(_ s: String) -> String { wrap("32", s) }
     static func yellow(_ s: String) -> String { wrap("33", s) }
@@ -21,6 +25,7 @@ enum Style {
 
 /// Unbuffered write to stdout (print() is block-buffered when stdout is not a TTY).
 func emit(_ s: String) {
+    Spinner.shared.stop()   // never print over the working indicator
     fputs(s, stdout)
     fflush(stdout)
 }
@@ -67,6 +72,7 @@ enum Logo {
 }
 
 func emitError(_ s: String) {
+    Spinner.shared.stop()
     fputs(Style.red(Sanitize.terminal(s)) + "\n", stderr)   // may contain server-provided text
 }
 
@@ -121,6 +127,15 @@ final class Interrupter {
 
     func track(_ t: Task<Bool, Never>?) {
         lock.lock(); task = t; lock.unlock()
+    }
+
+    /// Ctrl-C read as a key (raw mode, e.g. at a permission menu) does what SIGINT does: cancel the running turn.
+    func interruptTurn() {
+        lock.lock(); let t = task; lock.unlock()
+        if let t, !t.isCancelled {
+            t.cancel()
+            emit(Style.yellow("⏹  Interrupted") + "\n")
+        }
     }
 
     private func fire() {
