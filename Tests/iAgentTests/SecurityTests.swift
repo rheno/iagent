@@ -422,6 +422,15 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(r.note.contains("timed out") && Date().timeIntervalSince(start) < 5)
     }
 
+    @Test func backgroundChildrenKeepRunningAfterTheCommandReturns() async throws {
+        // `server &` must keep running after the tool returned: its output (here 300 KB, past the 64 KB pipe buffer)
+        // is drained and discarded, so it neither blocks on a full pipe nor gets SIGPIPE.
+        let box = try Sandbox()
+        _ = try await runShell("(sleep 1; yes log line | head -c 5000000; sleep 1; touch alive.marker) &", cwd: box.root, timeout: 5)
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        #expect(FileManager.default.fileExists(atPath: box.root.appendingPathComponent("alive.marker").path))
+    }
+
     @Test func timeoutsKillCommandsThatIgnoreSIGTERM() async throws {
         let box = try Sandbox()
         let start = Date()
@@ -548,6 +557,9 @@ func isBlocked(_ a: Approval) -> Bool {
                             ["type": "message_delta", "delta": ["stop_reason": "end_turn"]], ["type": "message_stop"]]
         let turn = try await p.parse(lines(done), callbacks: quiet)
         #expect(turn.text == "Hel" && turn.stopReason == "end_turn")
+        // A gateway that sends the stop reason but no message_stop still finishes the turn.
+        let noStopEvent = try await p.parse(lines(Array(done.dropLast())), callbacks: quiet)
+        #expect(noStopEvent.text == "Hel")
     }
 }
 

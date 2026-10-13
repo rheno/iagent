@@ -77,8 +77,8 @@ In this mode, no data leaves the machine:
 
 - `read_file` is limited to 20 MB, `web_fetch` downloads to 5 MB, and command output to 10 MB.
 - Tool results sent to the model are cut at 30k characters.
-- Commands time out after 120 s by default (600 s max). A timeout or Ctrl-C sends SIGTERM to the command's whole process group, then SIGKILL after 2 s. A background child (`server &`) that keeps the output pipe open doesn't hold up the result, and input for a command that never reads it can't block past the timeout.
-- An Anthropic stream that ends without `message_stop` (a dropped connection) is reported as an error, so a cut-off reply or tool call is never treated as finished.
+- Commands time out after 120 s by default (600 s max). A timeout or Ctrl-C sends SIGTERM to the command's whole process group, then SIGKILL after 2 s. A background child (`server &`) that keeps the output pipe open doesn't hold up the result and keeps running: its later output is read and discarded, and input for a command that never reads it can't block past the timeout.
+- An Anthropic stream that ends before its stop reason or `message_stop` (a dropped connection) is reported as an error, so a cut-off reply or tool call is never treated as finished.
 - Numeric tool arguments are clamped, so an out-of-range value (`limit: -5`, `offset: 1e300`) gets an error or a clamped value instead of crashing the session.
 - A single request is limited to 60 model calls.
 
@@ -136,7 +136,7 @@ Each control was tested with harmless payloads on macOS 26.7. These probes are a
 - **API keys:** `$OPENAI_API_KEY` was empty inside `bash`.
 - **Secret masking:** API keys of each known format, private key blocks, URL passwords, `.env`-style values and registered env values and credential-named custom headers (`Authorization: Bearer …`, `X-Api-Key`) were masked in tool results, while an ordinary header such as `X-Team` was not. Ordinary code such as `apiKey = config.apiKey` was left alone, and a full scan of this repository masked only the test fixture. A `read_file` of `.env` was blocked even with `--yolo`.
 - **Local-only mode:** Anthropic and LAN model servers were refused. `web_fetch` was not offered and `mac open` was blocked. Inside sandboxed `bash`, `curl https://…`, raw sockets, DNS lookups, `open URL` and Apple Events to Finder and Mail all failed (compared against an unsandboxed run where the network worked), while git, swift and python ran normally.
-- **Resource limits:** 30 MB of output was capped at 10 MB. `sleep 10 &` returned at once, and a command that traps SIGTERM was killed at its timeout. Out-of-range `read_file` numbers didn't crash. 1 MB of input to `sleep 10` timed out after 0.5 s without a SIGPIPE, and a stream cut before `message_stop` raised an error.
+- **Resource limits:** 30 MB of output was capped at 10 MB. `sleep 10 &` returned at once, and a command that traps SIGTERM was killed at its timeout. Out-of-range `read_file` numbers didn't crash. A background job writing 5 MB after the tool returned kept running to the end. 1 MB of input to `sleep 10` timed out after 0.5 s without a SIGPIPE, and a stream cut before `message_stop` raised an error.
 - **Case and nesting:** new `.ENVRC`, `.ZLOGIN` and `.Git/Hooks/…` writes asked every time, and so did `.git/modules/<sub>/hooks` and `config.worktree`.
 - **Folder trust:** an untrusted folder's `AGENTS.md` was left out of the system prompt in a non-interactive run and after answering `n`; it was included after `y` or with the folder in `trustedProjects`.
 - **Interrupted approval:** in a pseudo-terminal, Ctrl-C at a `write_file` prompt followed by `y` refused the call and created no file; the same run without Ctrl-C created it.

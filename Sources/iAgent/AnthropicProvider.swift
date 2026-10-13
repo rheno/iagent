@@ -73,8 +73,10 @@ final class AnthropicProvider: LLMProvider {
         return try await parse(HTTP.streamLines(req), callbacks: callbacks)
     }
 
-    /// Builds the turn from the SSE lines. A stream that ends without `message_stop` was cut off (dropped connection,
-    /// proxy timeout): its text is incomplete and its tool calls may be too, so it is an error, not a finished turn.
+    /// Builds the turn from the SSE lines. A stream that ends before the stop reason (`message_delta`, sent after
+    /// every content block is complete) or `message_stop` was cut off (dropped connection, proxy timeout): its text
+    /// is incomplete and its tool calls may be too, so it is an error, not a finished turn. Accepting the stop reason
+    /// alone keeps gateways that leave out `message_stop` working.
     func parse<Lines: AsyncSequence>(_ lines: Lines, callbacks: StreamCallbacks) async throws -> AssistantTurn
     where Lines.Element == String {
         var turn = AssistantTurn()
@@ -137,8 +139,8 @@ final class AnthropicProvider: LLMProvider {
             }
         }
 
-        guard finished else {
-            throw AgentError("The connection to the model dropped before its reply finished (no message_stop), so the partial reply was discarded. Send your message again.")
+        guard finished || turn.stopReason != nil else {
+            throw AgentError("The connection to the model dropped before its reply finished, so the partial reply was discarded. Send your message again.")
         }
         let ordered = blocks.keys.sorted().compactMap { blocks[$0] }
         turn.rawBlocks = ordered

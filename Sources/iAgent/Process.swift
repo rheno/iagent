@@ -99,8 +99,11 @@ func runCommand(_ argv: [String], cwd: URL? = nil, timeout: Double = 60, stdin: 
     // readToEnd() would block until that child exits, past any timeout and Ctrl-C.
     let drainDeadline = Date().addingTimeInterval(0.5)
     while !(out.finished && err.finished) && Date() < drainDeadline { usleep(20_000) }
-    outPipe.fileHandleForReading.readabilityHandler = nil
-    errPipe.fileHandleForReading.readabilityHandler = nil
+    // A background child may keep writing: drain and discard its output until it closes the pipe, so it neither
+    // blocks on a full pipe nor gets SIGPIPE. The closure holds the handle until EOF, then releases it.
+    for handle in Set([outPipe.fileHandleForReading, errPipe.fileHandleForReading]) {
+        handle.readabilityHandler = { _ in if handle.availableData.isEmpty { handle.readabilityHandler = nil } }
+    }
     return CommandResult(status: process.terminationStatus, stdout: out.string, stderr: err.string, note: note)
 }
 
