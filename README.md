@@ -13,7 +13,7 @@ A Claude-Code-style terminal agent written in Swift, with no third-party depende
 The coding tools are `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`, and `web_fetch`. Before it runs a command, changes a file, contacts a new web host, or touches anything outside the project, you're asked to approve the call (`y` / `a`lways / `n` / type feedback). Secret files and outgoing messages need confirmation every time, even with `--yolo`. See [SECURITY.md](SECURITY.md) for the full security model.
 
 <p align="center">
-  <img src="assets/screenshot-session.png" width="820" alt="iAgent session: bumping a version with an approved edit, refusing to read .env, and asking before adding a reminder">
+  <img src="assets/screenshot-session.png" width="820" alt="iAgent session: bumping a version with an approved edit, refusing to read .env, and a numbered approval menu before adding a reminder">
 </p>
 
 ## Apple ecosystem
@@ -42,7 +42,9 @@ On top of the coding tools, the agent gets tools for your whole Apple setup. Jus
 
 **Approvals.**
 - Read-only actions (device scans, listing reminders/events, battery, …) run without asking.
-- Personal data reads (contacts, notes, clipboard) and any change ask first. `--yolo` or answering `a` skips the prompt.
+- Personal data reads (contacts, notes, clipboard) and any change ask first, with a numbered menu: 1 Yes, 2 Yes and
+  don't ask again this session, 3 No (then say what to do instead). Pick with ↑/↓ and Enter, a digit, or y/a/n; Esc
+  means No. `--yolo` skips the menu.
 - `messages` always asks before each message, even with `--yolo`, and can't be used in non-interactive runs. The same goes for writing shell-startup files.
 - Secret files (`.env`, SSH/cloud keys) are never read for a cloud model. With `--local` they can be read after confirming each time.
 
@@ -84,10 +86,17 @@ git diff | iagent -p "review this diff" # one-shot from stdin
 REPL commands: `/help`, `/model [id]`, `/clear`, `/tools`, `/yolo`, `/cost`, `/exit`. Type `/` to open a command
 menu that filters as you type: ↑/↓ choose, Tab completes, Enter runs, Esc closes.
 
-The prompt is a full line editor. ↑/↓ recall earlier inputs from this session (history is kept in memory only, never
-written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ctrl-L work as in a shell. For a new line, press
-Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not submitted until you press
-Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and Ctrl-C during a turn stops it, including at an approval prompt (the tool call is then refused).
+The prompt is a full line editor in a framed input box. The row under it lists the main keys, with the model (or, for
+Apple's on-device model, the context use) on the right. ↑/↓ recall earlier inputs from this session (history is kept
+in memory only, never written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ctrl-L work as in a shell.
+For a new line, press Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not
+submitted until you press Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and
+Ctrl-C during a turn stops it, including at an approval menu (the tool call is then refused).
+
+Output looks like Claude Code's. Replies start with ⏺ and are rendered as markdown (headings, lists, code, bold,
+links). Tool calls show as `Read(…)`, `Update(…)`, `Search(…)` or `Bash(…)`, with a short result such as
+`⎿ Found 5 files`. While iAgent waits, a ✦ "Thinking…" line glows in Apple Intelligence colors with the elapsed time.
+Piped output (`-p`) stays plain text.
 
 ## Keeping data private
 
@@ -139,7 +148,8 @@ The model's context holds 4,096 tokens, and iAgent measures it with `fm count-to
 - At startup it counts its prompt and loads `AGENTS.md`, `CLAUDE.md` and `.iagent.md` only while they fit with
   1,024 tokens left for the conversation. A file that doesn't fit is skipped with a warning, so keep a short
   `.iagent.md` for this model.
-- After each answer it shows `context: 250 / 4096 tokens`, in yellow once it is three-quarters full.
+- The row under the input box shows the context use, e.g. `250 / 4096 tokens`. Once it is three-quarters full, a
+  yellow line suggests `/clear`.
 - A message that won't fit is stopped before it is sent. `/clear` starts a fresh conversation.
 
 With a larger main model (Claude, GPT, …), the `apple_fm` tool lets that model hand text work to the on-device
@@ -252,7 +262,8 @@ Non-interactive runs (`-p` with piped input, CI) can't ask, so they load instruc
 
 ## Anthropic specifics
 
-- Requests use adaptive thinking (shown dimmed as it streams) with `output_config.effort` (`--effort`, default `high`). Use `--no-thinking` for models without adaptive thinking. It is skipped automatically for Haiku.
+- Requests use adaptive thinking (in a terminal it stays behind the ✦ "Thinking…" line and is summed up as "Thought
+  for 4s"; piped output shows it dimmed) with `output_config.effort` (`--effort`, default `high`). Use `--no-thinking` for models without adaptive thinking. It is skipped automatically for Haiku.
 - Assistant content blocks, including thinking blocks and their signatures, are sent back unchanged on later turns. The history is append-only.
 - Prompt caching is on (`cache_control` at the top level), so the conversation prefix is reused across tool-loop iterations. You can see cache reads with `/cost`.
 - On `api.anthropic.com`, two more things are turned on:
@@ -266,13 +277,15 @@ Non-interactive runs (`-p` with piped input, CI) can't ask, so they load instruc
 ```
 Sources/iAgent/
   main.swift               CLI flags, REPL, slash commands, one-shot mode
-  LineEditor.swift         interactive prompt: line editing, history, / command menu
-  Agent.swift              agent loop (model → tools → model …), system prompt, stream renderer
+  LineEditor.swift         interactive prompt: framed input box, line editing, history, / command menu, approval menu
+  Agent.swift              agent loop (model → tools → model …), system prompts, stream renderer
+  Render.swift             Claude Code–style output: ⏺ markdown replies, tool names and results, ✦ spinner
+  AppleFM.swift            Apple's on-device model: fm serve, context fitting (fm count-tokens), apple_fm tool
   Config.swift             presets, config file / env / flag resolution
   Models.swift             message types, provider protocol, HTTP+SSE helpers with retry
   OpenAIProvider.swift     Chat Completions streaming + tool calls
   AnthropicProvider.swift  Messages API streaming + tool_use/tool_result
-  Tools.swift              coding tools + permission/approval prompts
+  Tools.swift              coding tools + permission/approval checks
   Process.swift            argv-based process runner, osascript bridge
   AppleDevices.swift       apple_devices, ios_device, simulator, airdrop (+ Bonjour, AirDrop helper)
   ApplePIM.swift           reminders, calendar, contacts, notes, messages
@@ -282,6 +295,9 @@ Sources/iAgent/
 Tests/iAgentTests/
   SecurityTests.swift      regression tests for every control in SECURITY.md
   ToolTests.swift          coding-tool behavior (read/write/edit/glob/grep/bash/web_fetch, invalid JSON)
+  AppleFMTests.swift       Apple on-device model: context fitting, chat prompt, fm schema, apple_fm approvals
+  RenderTests.swift        markdown rendering, tool result lines, spinner text, banner icon
+  LineEditorTests.swift    prompt editing, history, / completion and wrapping
 Info.plist                 privacy usage descriptions embedded into the binary
 iAgent.entitlements        hardened-runtime entitlements (Apple Events, Calendars, Contacts only)
 scripts/build-release.sh   signed release build

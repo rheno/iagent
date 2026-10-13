@@ -261,7 +261,7 @@ final class LineEditor {
 
     // MARK: Choice menu
 
-    /// A Claude Code–style numbered menu under `question`, answered with ↑/↓ and Enter, a digit, or y/n (Esc picks
+    /// A Claude Code–style numbered menu under `question`, answered with ↑/↓ and Enter, a digit, or y/a/n (Esc picks
     /// the last option). The menu is erased once answered. nil for Ctrl-C/Ctrl-D or end of input.
     func choose(_ question: String, options: [String]) -> Int? {
         guard !options.isEmpty, enableRawMode() else { return nil }
@@ -295,6 +295,7 @@ final class LineEditor {
                 if let n = Int(t), (1...options.count).contains(n) { return n - 1 }
                 switch t.lowercased() {
                 case "y": return 0
+                case "a" where options.count == 3: return 1   // "always", as the old [y]es/[a]lways/[n]o prompt
                 case "n": return options.count - 1
                 default: break
                 }
