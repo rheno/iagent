@@ -141,7 +141,9 @@ let permissions = Permissions(autoApprove: config.autoApprove)
 // Resolve symlinks (e.g. /tmp, /var) so paths from the file enumerator share the cwd prefix.
 var ctx = ToolContext(cwd: realPath(URL(fileURLWithPath: cwdPath).standardizedFileURL), permissions: permissions)
 ctx.localOnly = config.localOnly
-let tools = Toolbox.all(apple: config.appleToolsEnabled, localOnly: config.localOnly)
+let usesAppleFM = config.providerName == "fm"
+/// Apple's on-device model chats without tools: `fm serve` can't call them yet (see `Agent.buildChatPrompt`).
+let tools = usesAppleFM ? [] : Toolbox.all(apple: config.appleToolsEnabled, localOnly: config.localOnly)
 // Credential-looking env values (API keys, tokens) are masked wherever they show up in what the model receives.
 Redact.registerEnvironment()
 
@@ -171,18 +173,17 @@ if config.managesFMServer {
     }
 }
 
-let usesAppleFM = config.providerName == "fm"
 let modelName = usesAppleFM ? "Apple's on-device Foundation Model (Apple Intelligence), served by fm on this Mac"
                             : "\(provider.model), through \(provider.label)"
 var projectFiles = Agent.projectFiles(cwd: ctx.cwd)
 /// Tokens Apple's model spends on iAgent's prompt and tools before any conversation (0 for other providers).
 var fmBaseTokens = 0
 if usesAppleFM {
-    let base = Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly, instructions: [], model: modelName)
+    let base = Agent.buildChatPrompt(cwd: ctx.cwd, model: modelName, instructions: [])
     (projectFiles, fmBaseTokens) = await AppleFM.fitInstructions(projectFiles, system: base, tools: tools)
 }
 let instructions = Agent.trustedInstructions(projectFiles, cwd: ctx.cwd, trustedProjects: config.trustedProjects)
-let agent = Agent(provider: provider, tools: tools, ctx: ctx, instructions: instructions, model: modelName)
+let agent = Agent(provider: provider, tools: tools, ctx: ctx, instructions: instructions, model: modelName, chat: usesAppleFM)
 Interrupter.shared.install()
 
 /// Runs one request in a cancellable task so Ctrl-C interrupts it without killing the session.
@@ -231,8 +232,8 @@ var banner = [Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.labe
 if config.localOnly {
     banner.append(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network"))
 }
-if config.providerName == "fm" && config.appleTools == nil {
-    banner.append(Style.dim("  Apple's on-device model has a small context: Apple tools are off (\"appleTools\": true turns them on)"))
+if usesAppleFM {
+    banner.append(Style.dim("  Apple's on-device model: chat only, no file or command tools (fm serve can't call tools yet)"))
 }
 if permissions.autoApprove {
     banner.append(Style.yellow("  ⚠  --yolo: tool calls run without asking (secret files, files that run code later and messages still ask)"))

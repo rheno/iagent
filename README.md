@@ -129,15 +129,17 @@ iAgent starts `fm serve` on `127.0.0.1:8642` and stops it again when it exits. I
 there, iAgent uses that one. To run your own server, start it with `fm serve --port <n>` and pass
 `--base-url http://127.0.0.1:<n>/v1 -m system`.
 
-The model is small: its context window is only a few thousand tokens. Because of that, the Apple tools are off by
-default with `fm`. Use it for short, single-step tasks. `"appleTools": true` in the config turns the Apple tools back on.
+With `fm`, iAgent is a chat assistant only: no file, command or Apple tools. On macOS 27.0, `fm serve` can't call
+tools (given a tool list, the model never returns a tool call), and the long agent prompt made it refuse ordinary
+questions. Instead it gets a short prompt (about 200 tokens) with the current time, refreshed on every message.
+Use it for questions, explanations and code snippets; use a larger model for work on your files.
 
-iAgent measures the context with `fm count-tokens`:
+The model's context holds 4,096 tokens, and iAgent measures it with `fm count-tokens`:
 
-- At startup it counts its own prompt and tools (about 1,300 tokens) and loads `AGENTS.md`, `CLAUDE.md` and
-  `.iagent.md` only while they fit with 1,024 tokens left for the conversation. A file that doesn't fit is skipped
-  with a warning, so keep a short `.iagent.md` for this model.
-- After each answer it shows `context: 1507 / 4096 tokens`, in yellow once it is three-quarters full.
+- At startup it counts its prompt and loads `AGENTS.md`, `CLAUDE.md` and `.iagent.md` only while they fit with
+  1,024 tokens left for the conversation. A file that doesn't fit is skipped with a warning, so keep a short
+  `.iagent.md` for this model.
+- After each answer it shows `context: 250 / 4096 tokens`, in yellow once it is three-quarters full.
 - A message that won't fit is stopped before it is sent. `/clear` starts a fresh conversation.
 
 With a larger main model (Claude, GPT, …), the `apple_fm` tool lets that model hand text work to the on-device

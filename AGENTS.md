@@ -73,7 +73,7 @@ Sources/iAgent/
    Passing `--provider` on the CLI resets base URL/model/key from lower layers.
 2. `Config.providerName` picks the preset: API key env vars, else `fm` if installed (and no other `-m`), else Ollama;
    `--local` skips the keys. `main.swift` starts `fm serve` via `AppleFM.ensureServer` when `managesFMServer`, and
-   Apple tools default off for `fm` (`appleToolsEnabled`). `Config.makeProvider()` resolves preset/kind/base URL, enforces the HTTPS rule, finds the key
+   with `fm` there are no tools and `Agent.buildChatPrompt` replaces the agent prompt (`fm serve` can't call tools). `Config.makeProvider()` resolves preset/kind/base URL, enforces the HTTPS rule, finds the key
    (`apiKey` → Keychain → env var), and builds `AnthropicProvider` or `OpenAICompatibleProvider`.
 3. `Agent.run(_:)` appends the user message, calls `provider.complete(...)` with streaming callbacks, appends the
    `AssistantTurn`, executes every tool call via `Toolbox.execute`, appends `.toolResult`s, and loops until the

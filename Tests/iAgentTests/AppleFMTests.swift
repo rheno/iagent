@@ -42,6 +42,16 @@ import Testing
         #expect(prompt.contains("- Model: you are Apple's on-device Foundation Model"))
     }
 
+    @Test func chatModeGetsAShortPromptWithTheCurrentTime() {
+        let prompt = Agent.buildChatPrompt(cwd: URL(fileURLWithPath: "/tmp"), model: "Apple's on-device Foundation Model",
+                                           instructions: [Agent.ProjectFile(name: ".iagent.md", text: "Answer in French.")])
+        #expect(prompt.count < 1_200)
+        #expect(prompt.contains("You are Apple's on-device Foundation Model"))
+        #expect(prompt.contains("Current local time:"))
+        #expect(prompt.contains("Answer in French."))
+        #expect(!prompt.contains("edit_file"))
+    }
+
     @Test func plainJSONSchemaGetsWhatFmNeeds() throws {
         let plain: [String: Any] = [
             "type": "object",

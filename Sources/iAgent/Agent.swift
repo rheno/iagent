@@ -4,7 +4,9 @@ final class Agent {
     var provider: LLMProvider
     let tools: [Tool]
     let ctx: ToolContext
-    let system: String
+    /// Built for every model call, so chat mode's prompt carries the current time.
+    private let makeSystem: () -> String
+    var system: String { makeSystem() }
     private(set) var history: [ChatMessage] = []
     private(set) var usage = Usage()
     /// Tokens the last model call used: prompt, tools, conversation and answer (0 before the first call).
@@ -13,12 +15,20 @@ final class Agent {
 
     /// `instructions`: the project instruction files the user trusted (see `trustedInstructions`).
     /// `model`: how to name the model to itself, so it can answer "which model am I talking to?".
-    init(provider: LLMProvider, tools: [Tool], ctx: ToolContext, instructions: [ProjectFile], model: String? = nil) {
+    /// `chat`: Apple's on-device model, which gets `buildChatPrompt` instead (see there).
+    init(provider: LLMProvider, tools: [Tool], ctx: ToolContext, instructions: [ProjectFile], model: String? = nil,
+         chat: Bool = false) {
         self.provider = provider
         self.tools = tools
         self.ctx = ctx
-        self.system = Redact.secrets(Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly,
-                                                             instructions: instructions, model: model)).text
+        if chat {
+            let cwd = ctx.cwd
+            makeSystem = { Redact.secrets(Agent.buildChatPrompt(cwd: cwd, model: model, instructions: instructions)).text }
+        } else {
+            let system = Redact.secrets(Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly,
+                                                                instructions: instructions, model: model)).text
+            makeSystem = { system }
+        }
     }
 
     func reset() {
@@ -160,6 +170,25 @@ final class Agent {
         for file in instructions ?? projectFiles(cwd: cwd) {
             prompt += instructionBlock(file)
         }
+        return prompt
+    }
+
+    /// Apple's on-device model through `fm serve` can't call tools yet: given a tool list, it never returns a tool
+    /// call and leaks template tokens instead, and it reads the long agent prompt as a reason to refuse even "what is
+    /// Swift?". So it gets no tools and this short prompt (about 150 tokens of its 4,096), with the current time,
+    /// which it can't look up.
+    static func buildChatPrompt(cwd: URL, model: String?, instructions: [ProjectFile]) -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm"
+        var prompt = """
+        You are iAgent, a helpful assistant in the user's Mac terminal\(model.map { ". You are \($0)" } ?? ""). \
+        Answer general questions (e.g. "what is Swift?") and write code from your own knowledge, directly and briefly; \
+        replies are plain text in a terminal. You have no access to this Mac's files or commands, or to the internet: \
+        when asked for those (e.g. "list the files here"), say so in one sentence and suggest running iAgent with a \
+        larger model.
+        Current local time: \(df.string(from: Date())) (\(TimeZone.current.identifier)). Working directory: \(cwd.path).
+        """
+        for file in instructions { prompt += instructionBlock(file) }
         return prompt
     }
 
