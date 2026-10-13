@@ -6,7 +6,7 @@ iAgent runs an LLM that can read files, run commands and act on your Apple devic
 - the controls that do it, mapped to the standards they come from,
 - the risks that remain.
 
-The last review was on 2026-10-13 against v0.3.0. Every control below has a regression test that tries to break it, listed under "How it was verified".
+The last review was on 2026-10-13 against v0.3.1. Every control below has a regression test that tries to break it, listed under "How it was verified".
 
 ## Threat model
 
