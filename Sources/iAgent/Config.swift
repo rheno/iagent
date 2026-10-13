@@ -18,6 +18,7 @@ let presets: [String: Preset] = [
     "ollama": Preset(kind: .openai, baseURL: "http://localhost:11434/v1", keyEnv: nil, defaultModel: nil),
     "lmstudio": Preset(kind: .openai, baseURL: "http://localhost:1234/v1", keyEnv: nil, defaultModel: nil),
     "mlx": Preset(kind: .openai, baseURL: "http://localhost:8080/v1", keyEnv: nil, defaultModel: nil),
+    "fm": Preset(kind: .openai, baseURL: AppleFM.baseURL, keyEnv: nil, defaultModel: AppleFM.model),
 ]
 
 /// Resolution order (later wins): preset defaults < ~/.iagent/config.json < IAGENT_* env vars < CLI flags.
@@ -39,7 +40,8 @@ struct Config {
     var thinking = true
     var headers: [String: String] = [:]
     var autoApprove = false
-    var appleTools = true
+    /// nil = on, except for Apple's small on-device model (`fm`), whose context the Apple tool list would crowd out.
+    var appleTools: Bool?
     /// Folders whose AGENTS.md/CLAUDE.md/.iagent.md load without asking (config file only: the model can't write it).
     var trustedProjects: [String] = []
     /// Non-fatal configuration warnings to show at startup.
@@ -100,10 +102,25 @@ struct Config {
         if let s = env["IAGENT_LOCAL_ONLY"] { localOnly = ["1", "true", "yes"].contains(s.lowercased()) }
     }
 
+    /// The provider preset name in effect. Local-only never autodetects a cloud provider from an API key.
+    var providerName: String {
+        provider ?? (localOnly ? (baseURL != nil ? "custom" : localDefault) : autodetectProvider(ProcessInfo.processInfo.environment))
+    }
+
+    /// Apple's on-device model when this Mac has it, else Ollama. A model id other than `system` can't be served
+    /// by `fm`, so it keeps going to Ollama (`iagent --local -m qwen3-coder`).
+    private var localDefault: String {
+        AppleFM.isInstalled && (model == nil || model == AppleFM.model) ? "fm" : "ollama"
+    }
+
+    /// `fm` at its preset address: iAgent starts and stops `fm serve` itself.
+    var managesFMServer: Bool { providerName == "fm" && baseURL == nil }
+
+    var appleToolsEnabled: Bool { appleTools ?? (providerName != "fm") }
+
     func makeProvider() throws -> LLMProvider {
         let env = ProcessInfo.processInfo.environment
-        // Local-only never autodetects a cloud provider from an API key in the environment.
-        let name = provider ?? (localOnly ? (baseURL != nil ? "custom" : "ollama") : autodetectProvider(env))
+        let name = providerName
         let preset = presets[name]
         guard let resolvedKind = kind ?? preset?.kind ?? (baseURL != nil ? .openai : nil) else {
             throw AgentError("Unknown provider '\(name)'. Use one of: \(presets.keys.sorted().joined(separator: ", ")), or set --base-url for any OpenAI-compatible server.")
@@ -174,6 +191,6 @@ struct Config {
         if env["ANTHROPIC_API_KEY"] != nil { return "anthropic" }
         if env["OPENAI_API_KEY"] != nil { return "openai" }
         if env["OPENROUTER_API_KEY"] != nil { return "openrouter" }
-        return "ollama"
+        return localDefault
     }
 }

@@ -201,7 +201,8 @@ let maxFetchBytes = 5_000_000
 
 enum Toolbox {
     static func all(apple: Bool, localOnly: Bool = false) -> [Tool] {
-        let tools = [readFile, writeFile, editFile, glob, grep, bash, webFetch] + (apple ? AppleTools.all : [])
+        let tools = [readFile, writeFile, editFile, glob, grep, bash, webFetch]
+            + (apple ? AppleTools.all + (AppleFM.isInstalled ? [AppleFM.tool] : []) : [])
         return localOnly ? tools.filter { !LocalOnly.removedTools.contains($0.name) } : tools
     }
 

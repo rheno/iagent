@@ -54,6 +54,8 @@ The last review was on 2026-10-13 against v0.3.1. Every control below has a regr
 In this mode, no data leaves the machine:
 
 - **Model server on loopback only.** `localhost`, `127.0.0.0/8` and `::1` are allowed. Cloud APIs and LAN addresses are refused, and the provider is never autodetected from a cloud API key.
+- **Apple's on-device model is the default** when `/usr/bin/fm` exists. iAgent starts `fm serve` bound to `127.0.0.1` only, without the API key env vars (`SecretEnv`), and stops it on exit.
+- **`apple_fm` reads files under `read_file`'s rules** (`PathPolicy.readApproval`): the file is processed on this Mac, but the answer goes back to the main model, so a secret file is blocked for a cloud model and confirmed every time in local-only mode. Arguments go to `fm respond` as `--opt=value` after `--`, so a value starting with `-` can't become an option. Files over 12,000 bytes are refused, and the temporary schema file is deleted after the call.
 - **Egress tools removed.** `web_fetch`, `messages`, `airdrop`, `shortcuts`, `applescript`, `ios_device` and `apple_devices` (Bonjour/Bluetooth scanning) are not offered to the model, and a call to one is refused.
 - **Egress actions blocked.** These sync through iCloud or reach other devices: reminder/calendar/note changes, `mac open` (URLs), `mac clipboard_set` (Universal Clipboard), and `simulator openurl`/`raw`.
 - **`bash` runs under a Seatbelt sandbox** (`sandbox-exec`, `LocalOnly.sandboxProfile`), inherited by every child process. It denies outbound IP except to localhost, the DNS resolver services, LaunchServices opens (`open URL`/apps) and Apple Events (which could make another app send the data).

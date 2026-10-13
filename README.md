@@ -8,6 +8,7 @@ A Claude-Code-style terminal agent written in Swift, with no third-party depende
 
 - **Any OpenAI-compatible server**: OpenAI, OpenRouter, Ollama, LM Studio, vLLM, LiteLLM, Groq, DeepSeek, Together, …
 - **Anthropic API** (native Messages API with streaming, adaptive thinking, and prompt caching)
+- **Apple's on-device model** through the built-in `fm` command (macOS 27 with Apple Intelligence): no download, no key, nothing leaves the Mac
 
 The coding tools are `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`, and `web_fetch`. Before it runs a command, changes a file, contacts a new web host, or touches anything outside the project, you're asked to approve the call (`y` / `a`lways / `n` / type feedback). Secret files and outgoing messages need confirmation every time, even with `--yolo`. See [SECURITY.md](SECURITY.md) for the full security model.
 
@@ -33,6 +34,7 @@ On top of the coding tools, the agent gets tools for your whole Apple setup. Jus
 | `shortcuts` | List and run your Shortcuts, which also covers HomeKit/Home, Focus modes and app actions | `shortcuts` CLI |
 | `mac` | Notification, say, clipboard (Universal Clipboard puts it on your iPhone/iPad), open URL/app/file, screenshot, volume, dark mode, battery, Wi-Fi, running apps, now playing, display sleep | built-in commands |
 | `applescript` | Any scriptable Mac app (Music, Safari, Mail, Finder, Photos, Keynote, …) | `osascript` |
+| `apple_fm` | Hand a text task (summarize, classify, extract, rewrite) to Apple's on-device model, optionally with a file and a JSON Schema for structured output. The file is processed on your Mac; only the answer goes back to the main model | `fm respond` (macOS 27) |
 
 **Setup for iPhone/iPad over USB/Wi-Fi.** Install Xcode for `devicectl`/`simctl`, or run `brew install libimobiledevice` for the USB-only basics. Then connect the device, unlock it, and tap **Trust**.
 
@@ -103,7 +105,8 @@ still get through, so for confidential work use local-only mode.
 or `IAGENT_LOCAL_ONLY=1`. In this mode:
 
 - The model server must be on this Mac (`localhost`, `127.0.0.1`, `::1`). Cloud APIs and LAN servers are refused, and
-  the provider defaults to Ollama even if an API key is set. Example: `iagent --local -m qwen3-coder`.
+  the provider defaults to Apple's on-device model (`fm`) even if an API key is set. With `-m <model>`, or on a Mac without
+  `fm`, it defaults to Ollama instead. Example: `iagent --local -m qwen3-coder`.
 - Tools that send data elsewhere are removed: `web_fetch`, `messages`, `airdrop`, `shortcuts`, `applescript`,
   `ios_device`, `apple_devices`.
 - Actions that sync through iCloud or reach other devices are blocked: reminder/calendar/note changes,
@@ -112,6 +115,35 @@ or `IAGENT_LOCAL_ONLY=1`. In this mode:
   send Apple Events. Builds, git, and tests that don't need the network work normally.
 
 ## Running offline with a local model
+
+### Apple's on-device model (`fm`)
+
+On macOS 27 with Apple Intelligence on, the model is already on your Mac. Agree to the terms once, then start iAgent:
+
+```bash
+sudo fm license        # once per Mac
+iagent --local         # or just `iagent` when no API key is set
+```
+
+iAgent starts `fm serve` on `127.0.0.1:8642` and stops it again when it exits. If a server is already listening
+there, iAgent uses that one. To run your own server, start it with `fm serve --port <n>` and pass
+`--base-url http://127.0.0.1:<n>/v1 -m system`.
+
+The model is small: its context window is only a few thousand tokens. Because of that, the Apple tools are off by
+default with `fm`. Use it for short, single-step tasks. `"appleTools": true` in the config turns the Apple tools back on.
+
+iAgent measures the context with `fm count-tokens`:
+
+- At startup it counts its own prompt and tools (about 1,300 tokens) and loads `AGENTS.md`, `CLAUDE.md` and
+  `.iagent.md` only while they fit with 1,024 tokens left for the conversation. A file that doesn't fit is skipped
+  with a warning, so keep a short `.iagent.md` for this model.
+- After each answer it shows `context: 1507 / 4096 tokens`, in yellow once it is three-quarters full.
+- A message that won't fit is stopped before it is sent. `/clear` starts a fresh conversation.
+
+With a larger main model (Claude, GPT, …), the `apple_fm` tool lets that model hand text work to the on-device
+model instead, e.g. "summarize notes.txt on-device".
+
+### Other local servers
 
 1. Install a local model server and download a model while you still have internet:
 
@@ -162,13 +194,14 @@ Small models may struggle with the full tool list. Add `--no-apple` to drop the 
 | Anthropic | `iagent --provider anthropic` (default model `claude-opus-5-5`) | `ANTHROPIC_API_KEY` |
 | OpenAI | `iagent --provider openai -m gpt-5` | `OPENAI_API_KEY` |
 | OpenRouter | `iagent --provider openrouter -m qwen/qwen3-coder` | `OPENROUTER_API_KEY` |
+| Apple on-device | `iagent --provider fm` (model `system`) | – |
 | Ollama | `iagent --provider ollama -m qwen3-coder` | – |
 | LM Studio | `iagent --provider lmstudio -m <loaded-model>` | – |
 | mlx-lm | `iagent --provider mlx -m <model-id>` | – |
 | Any OpenAI-compatible | `iagent --base-url http://host:8000/v1 -m <id> --api-key-env MY_KEY` | your choice |
 | Anthropic-compatible gateway | `iagent --base-url https://gw.example.com --kind anthropic -m <id>` | `ANTHROPIC_API_KEY` |
 
-If you don't pass `--provider`, the provider is picked from the first key env var that is set: `ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then `OPENROUTER_API_KEY`. If none are set, it uses local Ollama.
+If you don't pass `--provider`, the provider is picked from the first key env var that is set: `ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then `OPENROUTER_API_KEY`. If none are set, it uses Apple's on-device model (`fm`). On a Mac without `fm`, or when `-m` names another model, it uses local Ollama.
 
 The model needs to support tool/function calling. Small local models often struggle with multi-step agent work.
 

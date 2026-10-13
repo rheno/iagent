@@ -9,7 +9,7 @@ iAgent (`iagent`, v0.3.1) is a terminal coding agent written in Swift, in the st
 either the Anthropic Messages API or any OpenAI-compatible Chat Completions server, and gives the model:
 
 - **Coding tools:** `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`, `web_fetch`
-- **Apple ecosystem tools:** `apple_devices`, `ios_device`, `simulator`, `airdrop`, `reminders`, `calendar`,
+- **Apple ecosystem tools:** `apple_devices`, `ios_device`, `simulator`, `airdrop`, `reminders`, `calendar`, `apple_fm`,
   `contacts`, `notes`, `messages`, `shortcuts`, `mac`, `applescript` (disable with `--no-apple`)
 
 Every non-read-only tool call goes through a human approval prompt. Security is a core feature, not an add-on;
@@ -51,6 +51,8 @@ assets/                    logos, app icon, README screenshot
 Sources/iAgent/
   main.swift               top-level script: flag parsing, config merge, --run-tool, one-shot mode, REPL + slash cmds (add new ones to `slashCommands` so /help and the menu list them)
   LineEditor.swift         raw-mode prompt: LineBuffer editing, in-memory InputHistory, SlashCompletion menu, PromptLayout
+  AppleFM.swift            Apple on-device model: starts/stops `fm serve` on 127.0.0.1:8642 (license/availability checks),
+                           fits instructions/messages into its 4,096 tokens (`fm count-tokens`), apple_fm tool (`fm respond`)
   Config.swift             provider presets, ~/.iagent/config.json (with profiles) → IAGENT_* env → CLI flags; Keychain key
   Models.swift             ChatMessage/AssistantTurn/ToolCall/Usage, LLMProvider protocol, HTTP sessions, SSE + retry
   Agent.swift              agent loop (model → tools → model …), system prompt builder, StreamRenderer
@@ -69,7 +71,9 @@ Sources/iAgent/
 
 1. `main.swift` parses flags, then merges config: `Config.loadFile()` → `loadEnv()` → CLI flags (`cliSet`).
    Passing `--provider` on the CLI resets base URL/model/key from lower layers.
-2. `Config.makeProvider()` resolves preset/kind/base URL, enforces the HTTPS rule, finds the key
+2. `Config.providerName` picks the preset: API key env vars, else `fm` if installed (and no other `-m`), else Ollama;
+   `--local` skips the keys. `main.swift` starts `fm serve` via `AppleFM.ensureServer` when `managesFMServer`, and
+   Apple tools default off for `fm` (`appleToolsEnabled`). `Config.makeProvider()` resolves preset/kind/base URL, enforces the HTTPS rule, finds the key
    (`apiKey` → Keychain → env var), and builds `AnthropicProvider` or `OpenAICompatibleProvider`.
 3. `Agent.run(_:)` appends the user message, calls `provider.complete(...)` with streaming callbacks, appends the
    `AssistantTurn`, executes every tool call via `Toolbox.execute`, appends `.toolResult`s, and loops until the
@@ -118,6 +122,8 @@ toolchain, so this is not a dependency) and `@testable import iAgent`:
   policy and symlinked secrets, operand/osascript/argv injection, API-key scrubbing, HTTPS rule, redirect
   delegates, approval levels, output/time limits). A security change must keep these green and add a test.
 - `Tests/iAgentTests/ToolTests.swift`: coding-tool behavior, run in a temp `Sandbox` directory.
+- `Tests/iAgentTests/AppleFMTests.swift`: context fitting (counting injected, no model needed), `fm` schema
+  conversion, apple_fm approvals.
 - `Tests/iAgentTests/LineEditorTests.swift`: prompt editing, history, `/` completion and wrapping (pure logic;
   the raw-terminal I/O is checked by hand in a real terminal).
 

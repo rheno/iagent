@@ -19,7 +19,8 @@ USAGE
   echo "prompt" | iagent [options]   one-shot from stdin
 
 OPTIONS
-  --provider <name>     anthropic | openai | openrouter | ollama | lmstudio | mlx (default: autodetect from API key env vars)
+  --provider <name>     anthropic | openai | openrouter | fm | ollama | lmstudio | mlx (default: from API key env
+                        vars; with none, or with --local, Apple's on-device model via fm)
   -m, --model <id>      model id, e.g. claude-opus-5-5, gpt-5, qwen3-coder, anthropic/claude-sonnet-5-5
   --base-url <url>      any OpenAI-compatible endpoint (e.g. http://localhost:8000/v1)
   --kind <openai|anthropic>  API dialect for a custom --base-url (default: openai)
@@ -140,7 +141,7 @@ let permissions = Permissions(autoApprove: config.autoApprove)
 // Resolve symlinks (e.g. /tmp, /var) so paths from the file enumerator share the cwd prefix.
 var ctx = ToolContext(cwd: realPath(URL(fileURLWithPath: cwdPath).standardizedFileURL), permissions: permissions)
 ctx.localOnly = config.localOnly
-let tools = Toolbox.all(apple: config.appleTools, localOnly: config.localOnly)
+let tools = Toolbox.all(apple: config.appleToolsEnabled, localOnly: config.localOnly)
 // Credential-looking env values (API keys, tokens) are masked wherever they show up in what the model receives.
 Redact.registerEnvironment()
 
@@ -161,12 +162,35 @@ do {
     exit(2)
 }
 
-let instructions = Agent.trustedInstructions(Agent.projectFiles(cwd: ctx.cwd), cwd: ctx.cwd, trustedProjects: config.trustedProjects)
-let agent = Agent(provider: provider, tools: tools, ctx: ctx, instructions: instructions)
+if config.managesFMServer {
+    do {
+        try await AppleFM.ensureServer(at: URL(string: AppleFM.baseURL)!)
+    } catch {
+        emitError("error: \(error)")
+        exit(2)
+    }
+}
+
+let usesAppleFM = config.providerName == "fm"
+let modelName = usesAppleFM ? "Apple's on-device Foundation Model (Apple Intelligence), served by fm on this Mac"
+                            : "\(provider.model), through \(provider.label)"
+var projectFiles = Agent.projectFiles(cwd: ctx.cwd)
+/// Tokens Apple's model spends on iAgent's prompt and tools before any conversation (0 for other providers).
+var fmBaseTokens = 0
+if usesAppleFM {
+    let base = Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly, instructions: [], model: modelName)
+    (projectFiles, fmBaseTokens) = await AppleFM.fitInstructions(projectFiles, system: base, tools: tools)
+}
+let instructions = Agent.trustedInstructions(projectFiles, cwd: ctx.cwd, trustedProjects: config.trustedProjects)
+let agent = Agent(provider: provider, tools: tools, ctx: ctx, instructions: instructions, model: modelName)
 Interrupter.shared.install()
 
 /// Runs one request in a cancellable task so Ctrl-C interrupts it without killing the session.
 func runTurn(_ input: String) async -> Bool {
+    if usesAppleFM, let warning = await AppleFM.overflowWarning(input, used: max(agent.contextUsed, fmBaseTokens)) {
+        emitError(warning)
+        return false
+    }
     let task = Task<Bool, Never> {
         do {
             try await agent.run(input)
@@ -174,6 +198,9 @@ func runTurn(_ input: String) async -> Bool {
         } catch {
             if Task.isCancelled || error is CancellationError { return false }
             emitError("error: \(error)")
+            if usesAppleFM && AppleFM.isContextOverflow(error) {
+                emitError("This conversation filled Apple's on-device model (about 4,096 tokens). Type /clear to start a fresh one.")
+            }
             return false
         }
     }
@@ -203,6 +230,9 @@ var banner = [Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.labe
               Style.dim("  cwd: \(ctx.cwd.path)  — /help for commands")]
 if config.localOnly {
     banner.append(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network"))
+}
+if config.providerName == "fm" && config.appleTools == nil {
+    banner.append(Style.dim("  Apple's on-device model has a small context: Apple tools are off (\"appleTools\": true turns them on)"))
 }
 if permissions.autoApprove {
     banner.append(Style.yellow("  ⚠  --yolo: tool calls run without asking (secret files, files that run code later and messages still ask)"))
@@ -271,5 +301,10 @@ while true {
     }
 
     _ = await runTurn(input)
+    if usesAppleFM && agent.contextUsed > 0 {
+        let line = "  context: \(agent.contextUsed) / \(AppleFM.contextSize) tokens"
+        emit(agent.contextUsed * 4 > AppleFM.contextSize * 3
+             ? Style.yellow(line + " — nearly full, /clear starts a fresh conversation") + "\n" : Style.dim(line) + "\n")
+    }
     emit("\n")
 }

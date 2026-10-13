@@ -7,20 +7,24 @@ final class Agent {
     let system: String
     private(set) var history: [ChatMessage] = []
     private(set) var usage = Usage()
+    /// Tokens the last model call used: prompt, tools, conversation and answer (0 before the first call).
+    private(set) var contextUsed = 0
     var maxIterations = 60
 
     /// `instructions`: the project instruction files the user trusted (see `trustedInstructions`).
-    init(provider: LLMProvider, tools: [Tool], ctx: ToolContext, instructions: [ProjectFile]) {
+    /// `model`: how to name the model to itself, so it can answer "which model am I talking to?".
+    init(provider: LLMProvider, tools: [Tool], ctx: ToolContext, instructions: [ProjectFile], model: String? = nil) {
         self.provider = provider
         self.tools = tools
         self.ctx = ctx
         self.system = Redact.secrets(Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly,
-                                                             instructions: instructions)).text
+                                                             instructions: instructions, model: model)).text
     }
 
     func reset() {
         history.removeAll()
         usage = Usage()
+        contextUsed = 0
     }
 
     /// Runs one user request to completion: model call -> tools -> model call ... until the model stops calling tools.
@@ -45,6 +49,7 @@ final class Agent {
             renderer.finish()
             history.append(.assistant(turn))
             usage += turn.usage
+            if turn.usage.input > 0 { contextUsed = turn.usage.input + turn.usage.output }
 
             switch turn.stopReason {
             case "refusal":
@@ -78,7 +83,8 @@ final class Agent {
         emit(Style.yellow("⚠  Stopped after \(maxIterations) model calls. Say \"continue\" to keep going.\n"))
     }
 
-    static func buildSystemPrompt(cwd: URL, tools: [Tool], localOnly: Bool = false, instructions: [ProjectFile]? = nil) -> String {
+    static func buildSystemPrompt(cwd: URL, tools: [Tool], localOnly: Bool = false, instructions: [ProjectFile]? = nil,
+                                  model: String? = nil) -> String {
         let fm = FileManager.default
         let isGit = fm.fileExists(atPath: cwd.appendingPathComponent(".git").path)
         let os = ProcessInfo.processInfo.operatingSystemVersionString
@@ -112,6 +118,7 @@ final class Agent {
         - Date: \(df.string(from: Date()))
         - Tools: \(tools.map(\.name).joined(separator: ", "))
         """
+        if let model { prompt += "\n- Model: you are \(model)" }
 
         if tools.contains(where: { $0.name == "apple_devices" }) {
             let df2 = DateFormatter()
@@ -134,6 +141,11 @@ final class Agent {
             """
         }
 
+        if tools.contains(where: { $0.name == "apple_fm" }) {
+            prompt += "\n- apple_fm hands a text task (summarize, classify, extract) to Apple's on-device model: a file's contents stay "
+                + "on this Mac and only the answer comes back to you. Use it when the user wants something processed on-device."
+        }
+
         if localOnly {
             prompt += """
 
@@ -146,9 +158,13 @@ final class Agent {
         }
 
         for file in instructions ?? projectFiles(cwd: cwd) {
-            prompt += "\n\n# Project instructions (\(file.name))\n\(truncate(file.text, max: 20_000))"
+            prompt += instructionBlock(file)
         }
         return prompt
+    }
+
+    static func instructionBlock(_ file: ProjectFile) -> String {
+        "\n\n# Project instructions (\(file.name))\n\(truncate(file.text, max: 20_000))"
     }
 
     struct ProjectFile: Equatable { let name, text: String }
