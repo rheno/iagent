@@ -40,6 +40,8 @@ struct Config {
     var headers: [String: String] = [:]
     var autoApprove = false
     var appleTools = true
+    /// Folders whose AGENTS.md/CLAUDE.md/.iagent.md load without asking (config file only: the model can't write it).
+    var trustedProjects: [String] = []
     /// Non-fatal configuration warnings to show at startup.
     var warnings: [String] = []
 
@@ -84,6 +86,7 @@ struct Config {
         if let s = v["effort"] as? String { effort = s }
         if let b = v["thinking"] as? Bool { thinking = b }
         if let b = v["appleTools"] as? Bool { appleTools = b }
+        if let a = v["trustedProjects"] as? [String] { trustedProjects = a }
         if let h = v["headers"] as? [String: String] { headers.merge(h) { _, new in new } }
     }
 

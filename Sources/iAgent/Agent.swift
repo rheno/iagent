@@ -9,11 +9,13 @@ final class Agent {
     private(set) var usage = Usage()
     var maxIterations = 60
 
-    init(provider: LLMProvider, tools: [Tool], ctx: ToolContext) {
+    /// `instructions`: the project instruction files the user trusted (see `trustedInstructions`).
+    init(provider: LLMProvider, tools: [Tool], ctx: ToolContext, instructions: [ProjectFile]) {
         self.provider = provider
         self.tools = tools
         self.ctx = ctx
-        self.system = Redact.secrets(Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly)).text
+        self.system = Redact.secrets(Agent.buildSystemPrompt(cwd: ctx.cwd, tools: tools, localOnly: ctx.localOnly,
+                                                             instructions: instructions)).text
     }
 
     func reset() {
@@ -76,7 +78,7 @@ final class Agent {
         emit(Style.yellow("⚠  Stopped after \(maxIterations) model calls. Say \"continue\" to keep going.\n"))
     }
 
-    static func buildSystemPrompt(cwd: URL, tools: [Tool], localOnly: Bool = false) -> String {
+    static func buildSystemPrompt(cwd: URL, tools: [Tool], localOnly: Bool = false, instructions: [ProjectFile]? = nil) -> String {
         let fm = FileManager.default
         let isGit = fm.fileExists(atPath: cwd.appendingPathComponent(".git").path)
         let os = ProcessInfo.processInfo.operatingSystemVersionString
@@ -143,12 +145,47 @@ final class Agent {
             """
         }
 
-        for name in ["AGENTS.md", "CLAUDE.md", ".iagent.md"] {
-            if let text = projectInstructions(cwd.appendingPathComponent(name), cwd: cwd), !text.isEmpty {
-                prompt += "\n\n# Project instructions (\(name))\n\(truncate(text, max: 20_000))"
-            }
+        for file in instructions ?? projectFiles(cwd: cwd) {
+            prompt += "\n\n# Project instructions (\(file.name))\n\(truncate(file.text, max: 20_000))"
         }
         return prompt
+    }
+
+    struct ProjectFile: Equatable { let name, text: String }
+
+    /// The instruction files present in the project that pass `projectInstructions`.
+    static func projectFiles(cwd: URL) -> [ProjectFile] {
+        ["AGENTS.md", "CLAUDE.md", ".iagent.md"].compactMap { name in
+            projectInstructions(cwd.appendingPathComponent(name), cwd: cwd).flatMap { $0.isEmpty ? nil : ProjectFile(name: name, text: $0) }
+        }
+    }
+
+    /// Instruction files carry the authority of the system prompt, so a cloned repo's AGENTS.md is the easiest way
+    /// to inject instructions (OWASP LLM01). They are used only for a folder the user trusts: listed in
+    /// `trustedProjects` in ~/.iagent/config.json, or confirmed at startup. The answer is kept for this session only,
+    /// since nothing is written to disk. Non-interactive runs can't ask, so they need `trustedProjects`.
+    static func trustedInstructions(_ files: [ProjectFile], cwd: URL, trustedProjects: [String],
+                                    interactive: Bool = isatty(STDIN_FILENO) != 0,
+                                    ask: () -> String? = { readLine() }) -> [ProjectFile] {
+        guard !files.isEmpty else { return [] }
+        let trusted = trustedProjects.map { realPath(URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)).path }
+        if trusted.contains(cwd.path) { return files }
+        let names = files.map(\.name).joined(separator: ", ")
+        guard interactive else {
+            emitError("warning: not loading \(names): \(cwd.path) isn't in trustedProjects in ~/.iagent/config.json, and a non-interactive run can't ask")
+            return []
+        }
+        for file in files {
+            let lines = file.text.components(separatedBy: "\n")
+            emit(Style.bold("  \(file.name)") + Style.dim(" (\(lines.count) lines)") + "\n")
+            emit(lines.prefix(8).map { Style.dim("    │ " + Sanitize.terminal($0)) }.joined(separator: "\n") + "\n")
+            if lines.count > 8 { emit(Style.dim("    │ … \(lines.count - 8) more lines") + "\n") }
+        }
+        emit(Style.yellow("  This folder has project instructions that become part of the model's system prompt and can steer it.\n"))
+        emit(Style.yellow("  Trust \(Sanitize.terminal(cwd.path)) and load \(names)? ") + Style.dim("[y]es / [n]o: "))
+        if let answer = ask()?.trimmingCharacters(in: .whitespaces).lowercased(), ["y", "yes"].contains(answer) { return files }
+        emit(Style.dim("  Not loaded. To trust this folder without asking, add it to \"trustedProjects\" in ~/.iagent/config.json.\n"))
+        return []
     }
 
     /// A project instruction file, read under the same rules as read_file: a cloned repo could make `AGENTS.md` a

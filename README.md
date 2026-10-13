@@ -85,7 +85,7 @@ menu that filters as you type: ↑/↓ choose, Tab completes, Enter runs, Esc cl
 The prompt is a full line editor. ↑/↓ recall earlier inputs from this session (history is kept in memory only, never
 written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ctrl-L work as in a shell. For a new line, press
 Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not submitted until you press
-Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and Ctrl-C during a turn stops it.
+Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and Ctrl-C during a turn stops it, including at an approval prompt (the tool call is then refused).
 
 ## Keeping data private
 
@@ -191,7 +191,7 @@ Settings are applied in this order, with later ones winning: `~/.iagent/config.j
 
 To switch profiles for a single run: `IAGENT_PROFILE=claude iagent`. Other env vars: `IAGENT_PROVIDER`, `IAGENT_MODEL`, `IAGENT_BASE_URL`, `IAGENT_API_KEY`, `IAGENT_EFFORT`, `IAGENT_LOCAL_ONLY`.
 
-Keys: `provider`, `kind` (`openai`|`anthropic`), `baseURL`, `model`, `apiKey`, `apiKeyEnv`, `apiKeyKeychain` (+ optional `apiKeyKeychainAccount`), `maxTokens`, `effort`, `thinking` (bool), `headers`, `allowInsecureHTTP` (bool), `appleTools` (bool), `localOnly` (bool).
+Keys: `provider`, `kind` (`openai`|`anthropic`), `baseURL`, `model`, `apiKey`, `apiKeyEnv`, `apiKeyKeychain` (+ optional `apiKeyKeychainAccount`), `maxTokens`, `effort`, `thinking` (bool), `headers`, `allowInsecureHTTP` (bool), `appleTools` (bool), `localOnly` (bool), `trustedProjects` (list of folders).
 
 Store the API key in the macOS Keychain instead of the file:
 
@@ -205,7 +205,15 @@ Remote servers must use `https://`. Plain `http://` is accepted only for localho
 
 ## Project instructions
 
-If the working directory has an `AGENTS.md`, `CLAUDE.md`, or `.iagent.md`, it is added to the system prompt.
+If the working directory has an `AGENTS.md`, `CLAUDE.md`, or `.iagent.md`, it can be added to the system prompt. These files steer the model, so a cloned repo could use them to slip in instructions. iAgent shows the start of each file and asks whether to trust the folder. The answer lasts for this session only.
+
+To load them without asking, list the folder in the config file:
+
+```json
+{ "trustedProjects": ["~/code/my-app"] }
+```
+
+Non-interactive runs (`-p` with piped input, CI) can't ask, so they load instruction files only for folders in `trustedProjects`. The files must be regular files inside the project, up to 1 MB. A symlink to somewhere else is skipped.
 
 ## Anthropic specifics
 

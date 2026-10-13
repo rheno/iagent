@@ -79,7 +79,8 @@ Sources/iAgent/
 4. `Toolbox.execute` parses JSON args, prints a summary, asks `Permissions.check` using the tool's `approval`
    closure, runs the tool, prints a 3-line preview, and returns output truncated to 30k chars.
 5. The system prompt (`Agent.buildSystemPrompt`) includes environment info, an Apple section when Apple tools are
-   on, and the contents of `AGENTS.md`, `CLAUDE.md` and `.iagent.md` from the working directory.
+   on, and the contents of `AGENTS.md`, `CLAUDE.md` and `.iagent.md` from the working directory. `main.swift` passes
+   only the files the user trusted (`Agent.trustedInstructions`: a startup question, or `trustedProjects` in the config).
 
 ## Adding or changing a tool
 

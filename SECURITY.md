@@ -31,6 +31,7 @@ The last review was on 2026-10-13 against v0.3.0. Every control below has a regr
 | ask, scoped | `bash` (the exact, complete command), `applescript` (the exact script and arguments), `mac open` (the exact target and app), `shortcuts run` (one shortcut), `web_fetch` (one host), `simulator openurl` (one URL), `ios_device raw` / `simulator raw` (the exact argument list), file access outside the working dir (one directory) | skips | that exact scope only |
 | sensitive | Secret/credential files (read or write), files that run code later (shell startup and login files, LaunchAgents, `.git/hooks`, `.git/config`, `~/.gitconfig`, `~/.config/git`, `~/.config/fish`) when written, sending messages | **still asks** | not offered |
 
+- Ctrl-C at an approval prompt ends the prompt and refuses the call, even if an answer is typed afterwards.
 - Non-interactive runs refuse anything that isn't "none" unless you pass `--yolo`. "Sensitive" calls are refused in non-interactive runs, with or without `--yolo`.
 - Each approval prompt shows exactly what will run: the full command or script, the diff (up to 40 lines each side, with a count of the rest; an overwrite shows only the lines it changes), the message recipient and text, or, for other tools, every argument of the call.
 - A path given to any tool (device copies, screenshots, shortcut input, app installs, message attachments, AirDrop items) follows the same rules as `read_file`/`write_file`, so a secret file can't reach the model or another person through a side door and a screenshot can't overwrite a shell startup file. The message prompt shows where a symlinked attachment really points.
@@ -69,6 +70,7 @@ In this mode, no data leaves the machine:
 - **Script values are passed as arguments.** AppleScript/JXA values are separated from the script by `--` and never spliced into it.
 - **Option-looking values are rejected.** Device ids, bundle ids, app names, shortcut names and URLs starting with `-` are refused. `say` reads its text from stdin.
 - **Terminal output is sanitized.** Model output, tool output, previews and server errors all pass through the sanitizer before printing. ESC, CR, other control characters, bidi overrides and zero-width characters become visible markers (`␛`, `␍`, `⟨U+202E⟩`). So nothing can retitle the window, erase lines, write the clipboard over OSC 52, or fake an approval prompt.
+- **Project instructions need a trusted folder.** `AGENTS.md`, `CLAUDE.md` and `.iagent.md` carry system-prompt authority, so they are loaded only after you confirm the folder at startup (each session), or when it is listed in `trustedProjects` in `~/.iagent/config.json`. Non-interactive runs can't ask and load them only for listed folders. The model can't add itself to that list: `~/.iagent` is a secret location.
 - **Untrusted content is labeled.** The system prompt tells the model to treat tool output as data. Web content is wrapped in `<untrusted_web_content>`, and a closing tag inside the page is defused so it can't end the wrapper early.
 
 ### Resource limits (OWASP LLM10, CWE-400/770)
@@ -135,6 +137,8 @@ Each control was tested with harmless payloads on macOS 26.7. These probes are a
 - **Local-only mode:** Anthropic and LAN model servers were refused. `web_fetch` was not offered and `mac open` was blocked. Inside sandboxed `bash`, `curl https://…`, raw sockets, DNS lookups, `open URL` and Apple Events to Finder and Mail all failed (compared against an unsandboxed run where the network worked), while git, swift and python ran normally.
 - **Resource limits:** 30 MB of output was capped at 10 MB. `sleep 10 &` returned at once, and a command that traps SIGTERM was killed at its timeout. Out-of-range `read_file` numbers didn't crash.
 - **Case and nesting:** new `.ENVRC`, `.ZLOGIN` and `.Git/Hooks/…` writes asked every time, and so did `.git/modules/<sub>/hooks` and `config.worktree`.
+- **Folder trust:** an untrusted folder's `AGENTS.md` was left out of the system prompt in a non-interactive run and after answering `n`; it was included after `y` or with the folder in `trustedProjects`.
+- **Interrupted approval:** in a pseudo-terminal, Ctrl-C at a `write_file` prompt followed by `y` refused the call and created no file; the same run without Ctrl-C created it.
 - **Side doors:** a `messages` attachment or AirDrop item symlinked to `~/.ssh/id_rsa` was blocked, and an `AGENTS.md -> .env` symlink was left out of the system prompt.
 - **Messages:** refused non-interactively even with `--yolo`.
 - **Signed build:** passes `codesign --verify --strict` with the `runtime` flag.

@@ -161,7 +161,8 @@ do {
     exit(2)
 }
 
-let agent = Agent(provider: provider, tools: tools, ctx: ctx)
+let instructions = Agent.trustedInstructions(Agent.projectFiles(cwd: ctx.cwd), cwd: ctx.cwd, trustedProjects: config.trustedProjects)
+let agent = Agent(provider: provider, tools: tools, ctx: ctx, instructions: instructions)
 Interrupter.shared.install()
 
 /// Runs one request in a cancellable task so Ctrl-C interrupts it without killing the session.

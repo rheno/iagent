@@ -70,7 +70,9 @@ final class Permissions {
         let options = reason != nil ? "[y]es / [n]o, or type feedback: " : "[y]es / [a]lways for this session / [n]o, or type feedback: "
         while true {
             emit(Style.yellow("  Allow \(shownKey)? ") + Style.dim(options))
-            guard let line = readLine() else { return "User denied permission." }
+            guard let line = Self.readAnswer() else {
+                return Task.isCancelled ? "Interrupted by user before this tool ran." : "User denied permission."
+            }
             let answer = line.trimmingCharacters(in: .whitespaces)
             switch answer.lowercased() {
             case "y", "yes": return nil
@@ -82,6 +84,16 @@ final class Permissions {
             default: return "User denied this tool call with feedback: \(answer)"
             }
         }
+    }
+
+    /// readLine() that gives up when the turn is interrupted (Ctrl-C), so a cancelled turn neither waits at the prompt
+    /// nor runs the tool when an answer is typed afterwards. A cooked-mode tty polls readable only once a line is complete.
+    static func readAnswer() -> String? {
+        while !Task.isCancelled {
+            var p = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+            if poll(&p, 1, 100) > 0 { return Task.isCancelled ? nil : readLine() }
+        }
+        return nil
     }
 
     /// What "always" remembers: the tool/action, plus the whole scope (an exact command, script, URL or directory),
