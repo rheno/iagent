@@ -94,7 +94,7 @@ instruction files), iagent replaces credentials with `[REDACTED]` and tells you 
 
 - known formats: Anthropic/OpenAI/GitHub/GitLab/Slack/AWS/Google/Stripe/npm/Hugging Face keys, JWTs, private key blocks
 - `user:password@` in URLs, `Bearer …` tokens, and `password=`/`token:`/`API_KEY=` style values containing letters and digits
-- the exact value of your API key and of every environment variable named like `*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`
+- the exact value of your API key, of every environment variable named like `*KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, and of custom `headers` with such names (e.g. `Authorization`)
 
 Secret files are never read for a cloud model at all. Masking is pattern-based. A secret in an unusual format can
 still get through, so for confidential work use local-only mode.

@@ -414,6 +414,14 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(out.hasPrefix("started") && Date().timeIntervalSince(start) < 3)
     }
 
+    @Test func unreadInputCantOutlastTheTimeout() async throws {
+        // 1 MB of stdin to a command that never reads it: the write used to block before the timeout started,
+        // and the EPIPE after the kill must not raise SIGPIPE (the test runner doesn't ignore it).
+        let start = Date()
+        let r = try await runCommand(["sleep", "10"], timeout: 0.5, stdin: Data(count: 1_000_000))
+        #expect(r.note.contains("timed out") && Date().timeIntervalSince(start) < 5)
+    }
+
     @Test func timeoutsKillCommandsThatIgnoreSIGTERM() async throws {
         let box = try Sandbox()
         let start = Date()
@@ -480,6 +488,18 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(Redact.secrets(code) == (code, 0))
     }
 
+    @Test func customHeaderCredentialsAreMasked() throws {
+        var config = Config()
+        config.provider = "ollama"
+        config.model = "m"
+        config.headers = ["Authorization": "Bearer gw-token-abc123xyz", "X-Api-Key": "hdrkey-998877",
+                          "X-Team": "engineering-platform"]
+        _ = try config.makeProvider()
+        let out = Redact.secrets("seen gw-token-abc123xyz and hdrkey-998877 for engineering-platform").text
+        #expect(!out.contains("gw-token-abc123xyz") && !out.contains("hdrkey-998877"))
+        #expect(out.contains("engineering-platform"))   // only credential-named headers
+    }
+
     @Test func registeredValuesAreMaskedAnywhere() {
         Redact.registerEnvironment(["MY_SERVICE_TOKEN": "plainwordsecret", "HOME": "/Users/someone-long"])
         #expect(Redact.secrets("it is plainwordsecret!").text == "it is [REDACTED]!")
@@ -500,6 +520,34 @@ func isBlocked(_ a: Approval) -> Bool {
         let (out, isError) = await Toolbox.execute(ToolCall(id: "1", name: "read_file", arguments: #"{"path":".env"}"#),
                                                    tools: Toolbox.all(apple: false), ctx: Permissions.yoloCtx(box))
         #expect(isError && out.hasPrefix("Blocked:") && !out.contains("hunter2"))
+    }
+}
+
+// MARK: - Provider streams
+
+@Suite struct StreamTests {
+    private func lines(_ events: [[String: Any]]) -> AsyncStream<String> {
+        AsyncStream { c in
+            for e in events { c.yield("data: " + JSON.string(e)) }
+            c.finish()
+        }
+    }
+
+    private let reply: [[String: Any]] = [
+        ["type": "message_start", "message": ["usage": ["input_tokens": 3]]],
+        ["type": "content_block_start", "index": 0, "content_block": ["type": "text", "text": ""]],
+        ["type": "content_block_delta", "index": 0, "delta": ["type": "text_delta", "text": "Hel"]],
+    ]
+
+    @Test func aDroppedAnthropicStreamIsAnErrorNotAFinishedTurn() async throws {
+        let p = AnthropicProvider(baseURL: URL(string: "https://api.example.com")!, apiKey: "k", model: "m", maxTokens: 1,
+                                  effort: nil, thinking: false, extraHeaders: [:])
+        let quiet = StreamCallbacks(onText: { _ in }, onThinking: { _ in })
+        await #expect(throws: AgentError.self) { try await p.parse(lines(reply), callbacks: quiet) }
+        let done = reply + [["type": "content_block_stop", "index": 0],
+                            ["type": "message_delta", "delta": ["stop_reason": "end_turn"]], ["type": "message_stop"]]
+        let turn = try await p.parse(lines(done), callbacks: quiet)
+        #expect(turn.text == "Hel" && turn.stopReason == "end_turn")
     }
 }
 

@@ -70,12 +70,19 @@ final class AnthropicProvider: LLMProvider {
         }
         for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = try JSON.data(body)
+        return try await parse(HTTP.streamLines(req), callbacks: callbacks)
+    }
 
+    /// Builds the turn from the SSE lines. A stream that ends without `message_stop` was cut off (dropped connection,
+    /// proxy timeout): its text is incomplete and its tool calls may be too, so it is an error, not a finished turn.
+    func parse<Lines: AsyncSequence>(_ lines: Lines, callbacks: StreamCallbacks) async throws -> AssistantTurn
+    where Lines.Element == String {
         var turn = AssistantTurn()
         var blocks: [Int: [String: Any]] = [:]
         var partialJSON: [Int: String] = [:]
+        var finished = false
 
-        for try await line in try await HTTP.streamLines(req) {
+        for try await line in lines {
             guard let payload = HTTP.sseData(line), let event = JSON.object(payload) else { continue }
             switch event["type"] as? String {
             case "message_start":
@@ -121,6 +128,8 @@ final class AnthropicProvider: LLMProvider {
                 if let usage = event["usage"] as? [String: Any] {
                     turn.usage.output = usage["output_tokens"] as? Int ?? turn.usage.output
                 }
+            case "message_stop":
+                finished = true
             case "error":
                 throw AgentError("Anthropic stream error: \(JSON.string(event["error"] ?? event))")
             default:
@@ -128,6 +137,9 @@ final class AnthropicProvider: LLMProvider {
             }
         }
 
+        guard finished else {
+            throw AgentError("The connection to the model dropped before its reply finished (no message_stop), so the partial reply was discarded. Send your message again.")
+        }
         let ordered = blocks.keys.sorted().compactMap { blocks[$0] }
         turn.rawBlocks = ordered
         for (idx, block) in blocks.sorted(by: { $0.key < $1.key }) {

@@ -76,9 +76,15 @@ func runCommand(_ argv: [String], cwd: URL? = nil, timeout: Double = 60, stdin: 
         throw AgentError("Could not run \(argv[0]): \(error.localizedDescription)")
     }
     if let inPipe, let stdin {
-        // Throwing variant: a child that exits without reading its input gives EPIPE, not a crash (SIGPIPE is ignored).
-        try? inPipe.fileHandleForWriting.write(contentsOf: stdin)
-        try? inPipe.fileHandleForWriting.close()
+        // Written in the background: a child that doesn't read more than the pipe buffer (64 KB) would otherwise
+        // block us here, before the timeout below starts. Once the child is gone the write fails with EPIPE;
+        // F_SETNOSIGPIPE makes that an error instead of a SIGPIPE that kills the agent.
+        let input = inPipe.fileHandleForWriting
+        _ = fcntl(input.fileDescriptor, F_SETNOSIGPIPE, 1)
+        DispatchQueue.global().async {
+            try? input.write(contentsOf: stdin)
+            try? input.close()
+        }
     }
 
     let deadline = Date().addingTimeInterval(timeout)

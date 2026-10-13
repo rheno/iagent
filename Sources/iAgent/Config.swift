@@ -126,6 +126,7 @@ struct Config {
         if let keyEnv { SecretEnv.names.insert(keyEnv) }
         let key = try apiKey ?? keychainKey() ?? keyEnv.flatMap { env[$0] }
         Redact.register(key)
+        Redact.registerCredentials(headers)   // a token in a custom header is a credential like the API key
         guard let model = model ?? base?.defaultModel else {
             throw AgentError("No model set for provider '\(name)'. Pass --model <id> or set IAGENT_MODEL.")
         }
