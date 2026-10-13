@@ -30,44 +30,51 @@ func emit(_ s: String) {
     fflush(stdout)
 }
 
-/// The app icon from the binary's __TEXT,__iagent_icon section (see Package.swift), drawn beside the REPL banner.
+/// The app icon beside the REPL banner.
 enum Logo {
-    static let rows = 3, textColumn = 9   // image height in rows; banner text starts this many columns in
+    static let width = 8
 
-    /// Terminals that draw inline images via the kitty graphics protocol. Not through tmux/screen, which drop it.
-    static var supported: Bool {
-        let env = ProcessInfo.processInfo.environment
-        guard Style.enabled, env["TMUX"] == nil, !(env["TERM"] ?? "").hasPrefix("screen") else { return false }
-        return env["TERM_PROGRAM"] == "ghostty" || env["TERM"] == "xterm-kitty" || env["KITTY_WINDOW_ID"] != nil
+    /// The icon's blue → purple gradient, left to right.
+    static let from = (r: 84, g: 104, b: 245), to = (r: 182, g: 88, b: 240)
+
+    /// The app icon drawn with text, so it shows in any color terminal (Terminal, iTerm2, VS Code, tmux…): a tile
+    /// in the icon's gradient with `❯ı_` in white, the i dotted with a ✦. Half blocks round off its top and bottom.
+    static func tile() -> [String] {
+        let glyphs = [["", "", "", "✦", "", "", "", ""], ["", "❯", "", "ı", "_", "", "", ""]]
+        func color(_ col: Int, row: Int) -> (r: Int, g: Int, b: Int) {
+            let t = (Double(col) + Double(row) * 0.6) / Double(width + 2)
+            let mix = { (a: Int, b: Int) in Int(Double(a) + Double(b - a) * t) }
+            return (mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b))
+        }
+        let reset = "\u{1B}[0m"
+        func edge(_ ch: String, row: Int) -> String {
+            (0..<width).map { c in c == 0 || c == width - 1 ? " " : sgr(38, color(c, row: row)) + ch + reset }.joined()
+        }
+        let middle = glyphs.enumerated().map { row, line in
+            line.enumerated().map { c, g in
+                sgr(48, color(c, row: row + 1)) + "\u{1B}[1;97m" + (g.isEmpty ? " " : g) + reset
+            }.joined()
+        }
+        return [edge("▄", row: 0)] + middle + [edge("▀", row: 3)]
     }
 
-    static var png: Data? {
-        var size: UInt = 0
-        let header = #dsohandle.assumingMemoryBound(to: mach_header_64.self)
-        guard let p = getsectiondata(header, "__TEXT", "__iagent_icon", &size), size > 0 else { return nil }
-        return Data(bytes: p, count: Int(size))
+    /// A foreground (38) or background (48) color: 24-bit when the terminal says it has it, else the nearest
+    /// xterm-256 color (Terminal.app).
+    static func sgr(_ kind: Int, _ c: (r: Int, g: Int, b: Int)) -> String {
+        if Spinner.trueColor { return "\u{1B}[\(kind);2;\(c.r);\(c.g);\(c.b)m" }
+        let levels = [0, 95, 135, 175, 215, 255]
+        func nearest(_ v: Int) -> Int { levels.indices.min { abs(levels[$0] - v) < abs(levels[$1] - v) }! }
+        return "\u{1B}[\(kind);5;\(16 + 36 * nearest(c.r) + 6 * nearest(c.g) + nearest(c.b))m"
     }
 
-    /// Draws `png` at the cursor, `rows` tall, without moving the cursor. Payload goes in 4096-byte chunks.
-    static func kittyImage(_ png: Data) -> String {
-        let b64 = Array(png.base64EncodedString().utf8)
-        var out = "", i = 0
-        repeat {
-            let end = min(i + 4096, b64.count), more = end < b64.count ? 1 : 0
-            let control = i == 0 ? "a=T,f=100,r=\(rows),C=1,q=2,m=\(more)" : "m=\(more)"
-            out += "\u{1B}_G\(control);" + String(decoding: b64[i..<end], as: UTF8.self) + "\u{1B}\\"
-            i = end
-        } while i < b64.count
-        return out
-    }
-
-    /// Prints the banner lines, with the icon to their left when the terminal can draw it.
+    /// Prints the banner lines with the icon to their left (plain lines when color is off).
     static func banner(_ lines: [String]) {
-        guard supported, let png else { emit(lines.map { $0 + "\n" }.joined()); return }
-        let lines = lines + Array(repeating: "", count: max(0, rows - lines.count))
-        // Make room first (scrolling if at the bottom), go back up, draw the image, then the text beside it.
-        emit(String(repeating: "\n", count: lines.count) + "\u{1B}[\(lines.count)A" + kittyImage(png)
-             + lines.map { "\u{1B}[\(textColumn)C" + $0 + "\n" }.joined())
+        guard Style.enabled else { emit(lines.map { $0 + "\n" }.joined()); return }
+        let icon = tile()
+        let lines = lines + Array(repeating: "", count: max(0, icon.count - lines.count))
+        emit(lines.enumerated().map { i, line in
+            (i < icon.count ? icon[i] : String(repeating: " ", count: width)) + "  " + line + "\n"
+        }.joined())
     }
 }
 

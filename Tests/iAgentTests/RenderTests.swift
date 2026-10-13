@@ -46,6 +46,12 @@ import Testing
         #expect(ToolDisplay.result("bash", "hello") == nil)
     }
 
+    @Test func bannerIconIsAFixedSizeTextTile() {
+        let rows = Logo.tile().map { $0.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression) }
+        #expect(rows == [" ▄▄▄▄▄▄ ", "   ✦    ", " ❯ ı_   ", " ▀▀▀▀▀▀ "])
+        #expect(rows.allSatisfy { $0.reduce(0) { $0 + PromptLayout.columns($1) } == Logo.width })
+    }
+
     @Test func spinnerLineShowsLabelAndTime() {
         let line = Spinner.line(label: "Thinking", frame: 3, seconds: 5)
         #expect(line.contains("(5s · ctrl-c to interrupt)"))
