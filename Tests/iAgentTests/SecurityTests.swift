@@ -88,6 +88,38 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(PathPolicy.writeApproval(".gitignore", box.ctx) == .ask)
     }
 
+    @Test func caseVariantsOfNewFilesAreCaught() throws {
+        // APFS is case-insensitive: zsh loads ~/.ZLOGIN as ~/.zlogin, direnv loads .ENVRC as .envrc.
+        let box = try Sandbox()
+        for path in [".ENVRC", ".ZLOGIN", ".Git/Hooks/pre-commit", "~/.ZSHENV-not-there/../.ZSHENV", "Server.PEM"] {
+            #expect(isSensitive(PathPolicy.writeApproval(path, box.ctx)), "\(path)")
+        }
+        try box.write(".env", "x")
+        #expect(isBlocked(PathPolicy.readApproval(".ENV", box.ctx)))
+    }
+
+    @Test func submoduleAndWorktreeGitFilesRunCodeLater() throws {
+        let box = try Sandbox()
+        for path in [".git/modules/sub/hooks/post-checkout", ".git/modules/sub/config", ".git/worktrees/w/config.worktree"] {
+            #expect(isSensitive(PathPolicy.writeApproval(path, box.ctx)), "\(path)")
+        }
+        #expect(PathPolicy.writeApproval(".git/info/exclude", box.ctx) == .ask)
+    }
+
+    @Test func projectInstructionsFollowTheReadRules() throws {
+        // A cloned repo could ship AGENTS.md -> .env; the system prompt goes to the provider unfiltered.
+        let box = try Sandbox()
+        try box.write(".env", "DB_PASSWORD=correcthorsebatterystaple\n")
+        try FileManager.default.createSymbolicLink(at: box.root.appendingPathComponent("AGENTS.md"),
+                                                   withDestinationURL: box.root.appendingPathComponent(".env"))
+        try box.write("CLAUDE.md", "Use tabs.")
+        let prompt = Agent.buildSystemPrompt(cwd: realPath(box.root), tools: [])
+        #expect(!prompt.contains("correcthorse"))
+        #expect(prompt.contains("Use tabs."))
+        #expect(mkfifo(box.root.appendingPathComponent(".iagent.md").path, 0o600) == 0)   // must not block startup
+        #expect(Agent.projectInstructions(box.root.appendingPathComponent(".iagent.md"), cwd: realPath(box.root)) == nil)
+    }
+
     @Test func outsideApprovalIsScopedToOneDirectory() throws {
         let box = try Sandbox()
         let a = PathPolicy.writeApproval("/tmp/a/x.txt", box.ctx), b = PathPolicy.writeApproval("/usr/local/x.txt", box.ctx)
@@ -190,7 +222,8 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(Transport.isLocal(URL(string: s)!))
     }
 
-    @Test(arguments: ["http://example.com", "http://8.8.8.8", "http://172.32.0.1", "http://localhost.example.com"])
+    @Test(arguments: ["http://example.com", "http://8.8.8.8", "http://172.32.0.1", "http://localhost.example.com",
+                      "http://10.0.0.1.evil.example", "http://192.168.1.1.nip.io", "http://10.0.0.256", "http://+10.0.0.1"])
     func remoteHosts(_ s: String) {
         #expect(!Transport.isLocal(URL(string: s)!))
     }
@@ -228,6 +261,7 @@ func isBlocked(_ a: Approval) -> Bool {
         }
         #expect(await follow("https://docs.example.com/b") != nil)
         #expect(await follow("https://evil.example/b") == nil)
+        #expect(await follow("http://docs.example.com/b") == nil)   // no downgrade to cleartext
     }
 
     private func redirect() -> HTTPURLResponse {
@@ -286,6 +320,20 @@ func isBlocked(_ a: Approval) -> Bool {
         if case .askScoped = approval("mac", ["action": "screenshot", "path": "/tmp/elsewhere/s.png"]) {} else { Issue.record("outside screenshot not scoped") }
     }
 
+    @Test func attachmentsAndRawCommandsFollowThePathAndScopeRules() throws {
+        let box = try Sandbox()
+        let ctx = box.ctx
+        func approval(_ tool: String, _ args: [String: Any]) -> Approval { AppleTools.all.first { $0.name == tool }!.approval(args, ctx) }
+        let secret = try box.write("elsewhere/.ssh/id_rsa", "not a real key")
+        try FileManager.default.createSymbolicLink(at: box.root.appendingPathComponent("report.pdf"), withDestinationURL: secret)
+        #expect(isBlocked(approval("messages", ["to": "+15551234567", "file": "report.pdf"])))
+        #expect(isSensitive(approval("messages", ["to": "+15551234567", "text": "hi"])))
+        #expect(isBlocked(approval("airdrop", ["items": ["https://example.com", "report.pdf"]])))
+        #expect(approval("airdrop", ["items": ["https://example.com"]]) == .ask)
+        #expect(approval("simulator", ["action": "raw", "args": ["list"]]) != approval("simulator", ["action": "raw", "args": ["spawn", "booted", "sh"]]))
+        if case .askScoped = approval("ios_device", ["action": "raw", "args": ["list", "devices"]]) {} else { Issue.record("devicectl raw not scoped") }
+    }
+
     @Test func promptsListEveryArgumentAndShowOverwritesAsADiff() throws {
         let preview = Toolbox.argumentPreview(["action": "run", "name": "Echo", "input_path": "/secret"])
         #expect(preview.contains("input_path: /secret") && preview.contains("name: Echo") && !preview.contains("action"))
@@ -332,6 +380,33 @@ func isBlocked(_ a: Approval) -> Bool {
         let r = try await runCommand(["sleep", "5"], timeout: 0.3)
         #expect(r.note.contains("timed out"))
         #expect(!r.ok)
+    }
+
+    @Test func backgroundChildrenDontHoldTheCommandOpen() async throws {
+        let box = try Sandbox()
+        let start = Date()
+        let out = try await runShell("sleep 10 & echo started", cwd: box.root, timeout: 5)
+        #expect(out.hasPrefix("started") && Date().timeIntervalSince(start) < 3)
+    }
+
+    @Test func timeoutsKillCommandsThatIgnoreSIGTERM() async throws {
+        let box = try Sandbox()
+        let start = Date()
+        let out = try await runShell("trap '' TERM; sleep 10; sleep 10", cwd: box.root, timeout: 0.5)
+        #expect(out.contains("timed out") && Date().timeIntervalSince(start) < 5)
+    }
+
+    @Test func outOfRangeNumbersDontCrash() async throws {
+        #expect(int(["n": 1e300], "n") == 1_000_000_000_000)
+        #expect(int(["n": Double.nan], "n") == nil)
+        #expect(int(["n": Int.max], "n") == 1_000_000_000_000)
+        let box = try Sandbox()
+        try box.write("f.txt", "a\nb\nc")
+        for args in [#"{"path":"f.txt","limit":-5}"#, #"{"path":"f.txt","offset":1e300}"#,
+                     #"{"path":"f.txt","offset":2,"limit":9223372036854775807}"#] {
+            let (out, _) = await Toolbox.execute(ToolCall(id: "1", name: "read_file", arguments: args), tools: [Toolbox.readFile], ctx: box.ctx)
+            #expect(!out.isEmpty, "\(args)")
+        }
     }
 }
 
@@ -410,7 +485,7 @@ func isBlocked(_ a: Approval) -> Bool {
     func loopbackServersAreAllowed(_ s: String) { #expect(Transport.isLoopback(URL(string: s)!)) }
 
     @Test(arguments: ["https://api.anthropic.com", "http://192.168.1.10:11434", "http://10.0.0.2", "http://mac.local",
-                      "http://127.0.0.1.evil.example"])
+                      "http://127.0.0.1.evil.example", "http://127.evil.example.com"])
     func everythingElseIsNot(_ s: String) { #expect(!Transport.isLoopback(URL(string: s)!)) }
 
     @Test func cloudProvidersAreRefused() {

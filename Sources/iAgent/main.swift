@@ -2,6 +2,9 @@ import Foundation
 
 let version = "0.3.0"
 
+// A write to a pipe whose reader exited must fail with EPIPE instead of killing the process.
+signal(SIGPIPE, SIG_IGN)
+
 // Internal helper mode: the `airdrop` tool re-launches this binary to host the AppKit sharing UI.
 if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == AirDropHelper.flag {
     AirDropHelper.run(Array(CommandLine.arguments.dropFirst(2)))
@@ -201,7 +204,7 @@ if config.localOnly {
     banner.append(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network"))
 }
 if permissions.autoApprove {
-    banner.append(Style.yellow("  ⚠  --yolo: tool calls run without asking (secrets, outside-project writes and messages still ask)"))
+    banner.append(Style.yellow("  ⚠  --yolo: tool calls run without asking (secret files, files that run code later and messages still ask)"))
 }
 Logo.banner(banner)
 emit("\n")

@@ -144,12 +144,26 @@ final class Agent {
         }
 
         for name in ["AGENTS.md", "CLAUDE.md", ".iagent.md"] {
-            let url = cwd.appendingPathComponent(name)
-            if let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty {
+            if let text = projectInstructions(cwd.appendingPathComponent(name), cwd: cwd), !text.isEmpty {
                 prompt += "\n\n# Project instructions (\(name))\n\(truncate(text, max: 20_000))"
             }
         }
         return prompt
+    }
+
+    /// A project instruction file, read under the same rules as read_file: a cloned repo could make `AGENTS.md` a
+    /// symlink to `.env` or `~/.aws/credentials`, which would go to the provider in the system prompt. Only regular
+    /// files inside the project are read (no FIFO that would block startup), up to 1 MB.
+    static func projectInstructions(_ url: URL, cwd: URL) -> String? {
+        guard (try? url.checkResourceIsReachable()) == true || (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil else { return nil }
+        let real = realPath(url)
+        guard PathPolicy.zone(url, cwd: cwd) == .inside,
+              let values = try? real.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              values.isRegularFile == true, (values.fileSize ?? 0) <= 1_000_000 else {
+            emitError("warning: not loading \(url.lastPathComponent): it points outside the project, at a secret file, or isn't a regular file under 1 MB")
+            return nil
+        }
+        return try? String(contentsOf: real, encoding: .utf8)
     }
 }
 

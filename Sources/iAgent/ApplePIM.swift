@@ -133,7 +133,7 @@ extension AppleTools {
                 let r = EKReminder(eventStore: store)
                 r.title = try str(args, "title")
                 r.notes = args["notes"] as? String
-                r.priority = int(args, "priority") ?? 0
+                r.priority = min(max(int(args, "priority") ?? 0, 0), 9)
                 guard let cal = try PIM.calendars(.reminder, named: args["list"] as? String)?.first ?? store.defaultCalendarForNewReminders() else {
                     throw AgentError("No default reminder list; pass `list`.")
                 }
@@ -227,7 +227,7 @@ extension AppleTools {
                     ?? (e.isAllDay ? start : start.addingTimeInterval(3600))
                 e.location = args["location"] as? String
                 e.notes = args["notes"] as? String
-                if let m = int(args, "alert_minutes") { e.addAlarm(EKAlarm(relativeOffset: TimeInterval(-m * 60))) }
+                if let m = int(args, "alert_minutes") { e.addAlarm(EKAlarm(relativeOffset: -TimeInterval(m) * 60)) }
                 guard let cal = try PIM.calendars(.event, named: args["calendar"] as? String)?.first ?? store.defaultCalendarForNewEvents else {
                     throw AgentError("No default calendar; pass `calendar`.")
                 }
@@ -276,7 +276,7 @@ extension AppleTools {
             }
             let found = try store.unifiedContacts(matching: predicate, keysToFetch: keys)
             if found.isEmpty { return "No contacts match '\(q)'." }
-            return found.prefix(int(args, "limit") ?? 10).map { c in
+            return found.prefix(max(int(args, "limit") ?? 10, 1)).map { c in
                 var lines = ["- \([c.givenName, c.familyName].filter { !$0.isEmpty }.joined(separator: " "))\(c.organizationName.isEmpty ? "" : " (\(c.organizationName))")"]
                 for p in c.phoneNumbers {
                     lines.append("    phone \(p.label.map { CNLabeledValue<CNPhoneNumber>.localizedString(forLabel: $0) } ?? ""): \(p.value.stringValue)")
@@ -370,12 +370,20 @@ extension AppleTools {
             "file": ["type": "string", "description": "Optional path of a file to attach"],
             "service": ["type": "string", "enum": ["imessage", "sms"], "description": "Default imessage"],
         ], required: ["to"]),
-        approval: { _, _ in .sensitive("sends a message to another person on your behalf") },
+        // An attachment follows the read_file rules too: a secret file (or a harmless-looking symlink to one) is blocked.
+        approval: { args, ctx in
+            let send = Approval.sensitive("sends a message to another person on your behalf")
+            return (args["file"] as? String).map { .strictest(send, PathPolicy.readApproval($0, ctx)) } ?? send
+        },
         summary: { "to: \(($0["to"] as? String) ?? "?")" },
-        preview: { args, _ in
+        preview: { args, ctx in
             var s = Style.yellow("    To: \(args["to"] as? String ?? "?") via \(args["service"] as? String ?? "imessage")")
             if let t = args["text"] as? String { s += "\n" + t.components(separatedBy: "\n").map { Style.yellow("    │ " + $0) }.joined(separator: "\n") }
-            if let f = args["file"] as? String { s += "\n" + Style.yellow("    📎 \(f)") }
+            if let f = args["file"] as? String {
+                // Show where a symlink really points, so `report.pdf` can't hide what is attached.
+                let real = Sanitize.terminal(realPath(ctx.resolve(f)).path)
+                s += "\n" + Style.yellow("    📎 \(f)" + (real == ctx.resolve(f).path ? "" : " → \(real)"))
+            }
             return s
         },
         run: { args, ctx in

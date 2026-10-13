@@ -92,7 +92,8 @@ enum HTTP {
             let text = String(decoding: body, as: UTF8.self)
             if retryable.contains(http.statusCode), attempt < 3 {
                 attempt += 1
-                let retryAfter = http.value(forHTTPHeaderField: "retry-after").flatMap(Double.init)
+                // The server's value is untrusted: a negative or NaN delay would trap in UInt64(_:).
+                let retryAfter = http.value(forHTTPHeaderField: "retry-after").flatMap(Double.init).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
                 let delay = min(retryAfter ?? pow(2.0, Double(attempt)), 30)
                 emit(Style.dim("  (HTTP \(http.statusCode), retrying in \(Int(delay))s...)\n"))
                 try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))

@@ -125,10 +125,13 @@ func str(_ a: [String: Any], _ key: String) throws -> String {
     return v
 }
 
+/// An integer argument, kept within ±1e12 so callers can do arithmetic on it without overflowing
+/// (Int(1e300) and Int.max + 1 trap and would end the session).
 func int(_ a: [String: Any], _ key: String) -> Int? {
-    if let v = a[key] as? Int { return v }
-    if let v = a[key] as? Double { return Int(v) }
-    if let v = a[key] as? String { return Int(v) }
+    let limit = 1_000_000_000_000
+    if let v = a[key] as? Int { return min(max(v, -limit), limit) }
+    if let v = a[key] as? Double, v.isFinite { return Int(min(max(v, Double(-limit)), Double(limit))) }
+    if let v = a[key] as? String, let n = Int(v) { return min(max(n, -limit), limit) }
     return nil
 }
 
@@ -279,7 +282,7 @@ enum Toolbox {
             if data.prefix(8000).contains(0) { throw AgentError("\(ctx.display(url)) looks like a binary file") }
             let lines = String(decoding: data, as: UTF8.self).components(separatedBy: "\n")
             let start = max((int(args, "offset") ?? 1) - 1, 0)
-            let limit = int(args, "limit") ?? 2000
+            let limit = max(int(args, "limit") ?? 2000, 1)
             guard start < lines.count else { return "(file has \(lines.count) lines; offset is past the end)" }
             let end = min(start + limit, lines.count)
             var out = (start..<end).map { i in
@@ -468,7 +471,7 @@ enum Toolbox {
             return c.components(separatedBy: "\n").map { Style.yellow("    $ " + $0) }.joined(separator: "\n")
         },
         run: { args, ctx in
-            try await runShell(try str(args, "command"), cwd: ctx.cwd, timeout: Double(min(int(args, "timeout") ?? 120, 600)),
+            try await runShell(try str(args, "command"), cwd: ctx.cwd, timeout: Double(min(max(int(args, "timeout") ?? 120, 1), 600)),
                                sandboxed: ctx.localOnly)
         })
 
@@ -507,6 +510,8 @@ enum Toolbox {
                 text = text.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
                     .replacingOccurrences(of: "\\s*\\n\\s*", with: "\n", options: .regularExpression)
             }
+            // The page can't close the wrapper early and pose as text outside it.
+            text = text.replacingOccurrences(of: "</untrusted_web_content", with: "<\\/untrusted_web_content", options: .caseInsensitive)
             return """
             HTTP \(http?.statusCode ?? 0) from \(url.host ?? "")
             <untrusted_web_content>

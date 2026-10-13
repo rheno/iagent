@@ -281,6 +281,8 @@ extension AppleTools {
                 return .strictest(.ask, PathPolicy.readApproval(args[action(args) == "install" ? "path" : "source"] as? String, ctx))
             case "copy_from": return .strictest(.ask, PathPolicy.writeApproval(args["destination"] as? String, ctx))
             case "screenshot": return (args["path"] as? String).map { .strictest(.ask, PathPolicy.writeApproval($0, ctx)) } ?? .ask
+            // raw can copy any file or run anything devicectl can: "always" covers one exact argument list.
+            case "raw": return .askScoped("devicectl \(args["args"] as? [String] ?? [])")
             default: return .ask
             }
         },
@@ -362,7 +364,7 @@ extension AppleTools {
                 _ = try await runChecked(["idevicescreenshot"] + udid + [path], timeout: 60)
                 return "Saved screenshot to \(path)"
             case "syslog":
-                let seconds = Double(min(int(args, "seconds") ?? 10, 120))
+                let seconds = Double(min(max(int(args, "seconds") ?? 10, 1), 120))
                 var argv = ["idevicesyslog"] + udid
                 if let f = args["filter"] as? String { argv += ["-m", f] }
                 let r = try await runCommand(argv, timeout: seconds)
@@ -402,6 +404,8 @@ extension AppleTools {
             case "openurl": return .askScoped("url " + (args["url"] as? String ?? ""))
             case "install": return .strictest(.ask, PathPolicy.readApproval(args["path"] as? String, ctx))
             case "screenshot": return (args["path"] as? String).map { .strictest(.ask, PathPolicy.writeApproval($0, ctx)) } ?? .ask
+            // raw reaches every simctl command (spawn, addmedia, io …): "always" covers one exact argument list.
+            case "raw": return .askScoped("simctl \(args["args"] as? [String] ?? [])")
             default: return .ask
             }
         },
@@ -460,17 +464,26 @@ extension AppleTools {
 // MARK: - airdrop
 
 extension AppleTools {
+    private static func isWebURL(_ s: String) -> Bool {
+        let l = s.lowercased()
+        return l.hasPrefix("http://") || l.hasPrefix("https://")
+    }
+
     static let airdrop = Tool(
         name: "airdrop",
         description: "Send files or URLs to a nearby iPhone/iPad/Mac with AirDrop. Opens the macOS AirDrop picker; the user chooses the recipient device. Waits until sent or cancelled.",
         schema: schema(["items": ["type": "array", "items": ["type": "string"], "description": "File paths and/or http(s) URLs"]],
                        required: ["items"]),
-        approval: { _, _ in .ask },
+        // Files follow the read_file rules: a secret file is blocked, outside files are scoped to their directory.
+        approval: { args, ctx in
+            (args["items"] as? [String] ?? []).filter { !isWebURL($0) }
+                .reduce(Approval.ask) { .strictest($0, PathPolicy.readApproval($1, ctx)) }
+        },
         summary: { (($0["items"] as? [String]) ?? []).joined(separator: ", ") },
         run: { args, ctx in
-            let items = (args["items"] as? [String] ?? []).map { $0.hasPrefix("http") ? $0 : ctx.resolve($0).path }
+            let items = (args["items"] as? [String] ?? []).map { isWebURL($0) ? $0 : ctx.resolve($0).path }
             guard !items.isEmpty else { throw AgentError("items is empty") }
-            for p in items where !p.hasPrefix("http") && !FileManager.default.fileExists(atPath: p) {
+            for p in items where !isWebURL(p) && !FileManager.default.fileExists(atPath: p) {
                 throw AgentError("No such file: \(p)")
             }
             guard let exe = Bundle.main.executablePath else { throw AgentError("Cannot locate own executable") }

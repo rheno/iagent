@@ -6,6 +6,12 @@ final class OutputBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     private var dropped = 0
+    private var eof = false
+    /// Set by the reader on end-of-file: every process holding the pipe's write end has closed it.
+    var finished: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return eof }
+        set { lock.lock(); eof = newValue; lock.unlock() }
+    }
     func append(_ d: Data) {
         lock.lock(); defer { lock.unlock() }
         let room = max(Self.cap - data.count, 0)
@@ -53,13 +59,15 @@ func runCommand(_ argv: [String], cwd: URL? = nil, timeout: Double = 60, stdin: 
     let err = OutputBuffer()
     outPipe.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
-        if !d.isEmpty { out.append(d) }
+        if d.isEmpty { out.finished = true } else { out.append(d) }
     }
     if !mergeStderr {
         errPipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if !d.isEmpty { err.append(d) }
+            if d.isEmpty { err.finished = true } else { err.append(d) }
         }
+    } else {
+        err.finished = true
     }
 
     do {
@@ -68,25 +76,37 @@ func runCommand(_ argv: [String], cwd: URL? = nil, timeout: Double = 60, stdin: 
         throw AgentError("Could not run \(argv[0]): \(error.localizedDescription)")
     }
     if let inPipe, let stdin {
-        inPipe.fileHandleForWriting.write(stdin)
+        // Throwing variant: a child that exits without reading its input gives EPIPE, not a crash (SIGPIPE is ignored).
+        try? inPipe.fileHandleForWriting.write(contentsOf: stdin)
         try? inPipe.fileHandleForWriting.close()
     }
 
     let deadline = Date().addingTimeInterval(timeout)
     var note = ""
     while process.isRunning {
-        if Task.isCancelled { process.terminate(); note = "[interrupted by user]"; break }
-        if Date() > deadline { process.terminate(); note = "[timed out after \(Int(timeout))s]"; break }
+        if Task.isCancelled { stop(process); note = "[interrupted by user]"; break }
+        if Date() > deadline { stop(process); note = "[timed out after \(Int(timeout))s]"; break }
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
     process.waitUntilExit()
+    // Drain until EOF, but don't wait on a background child (`server &`) that inherited the pipe and keeps it open:
+    // readToEnd() would block until that child exits, past any timeout and Ctrl-C.
+    let drainDeadline = Date().addingTimeInterval(0.5)
+    while !(out.finished && err.finished) && Date() < drainDeadline { usleep(20_000) }
     outPipe.fileHandleForReading.readabilityHandler = nil
-    if let rest = try? outPipe.fileHandleForReading.readToEnd() { out.append(rest) }
-    if !mergeStderr {
-        errPipe.fileHandleForReading.readabilityHandler = nil
-        if let rest = try? errPipe.fileHandleForReading.readToEnd() { err.append(rest) }
-    }
+    errPipe.fileHandleForReading.readabilityHandler = nil
     return CommandResult(status: process.terminationStatus, stdout: out.string, stderr: err.string, note: note)
+}
+
+/// Stops the child and everything it started: SIGTERM to its process group (Process makes the child a group
+/// leader), then SIGKILL if anything is still running after a grace period, so a command that ignores SIGTERM
+/// can't hang the agent.
+private func stop(_ process: Process) {
+    let pid = process.processIdentifier
+    if kill(-pid, SIGTERM) != 0 { process.terminate() }
+    let grace = Date().addingTimeInterval(2)
+    while process.isRunning && Date() < grace { usleep(50_000) }   // Task.sleep returns at once when cancelled
+    if kill(-pid, SIGKILL) != 0 && process.isRunning { kill(pid, SIGKILL) }
 }
 
 /// Like runCommand, but throws with the command's own error output on failure and returns trimmed stdout.
