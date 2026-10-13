@@ -32,30 +32,25 @@ func emit(_ s: String) {
 
 /// The app icon beside the REPL banner.
 enum Logo {
-    static let width = 8
+    static let width = 7
 
     /// The icon's blue → purple gradient, left to right.
     static let from = (r: 84, g: 104, b: 245), to = (r: 182, g: 88, b: 240)
 
-    /// The app icon drawn with text, so it shows in any color terminal (Terminal, iTerm2, VS Code, tmux…): a tile
-    /// in the icon's gradient with `❯ı_` in white, the i dotted with a ✦. Half blocks round off its top and bottom.
+    /// The app icon drawn with text, so it shows in any color terminal (Terminal, iTerm2, VS Code, tmux…) and on
+    /// light or dark themes: a rounded frame around `❯ı_`, with a ✦ in the top edge as the dot of the i, all in the
+    /// icon's gradient. No background fill, so no blocky edges.
+    static let shape = ["╭──✦──╮", "│ ❯ı_ │", "╰─────╯"]
+
     static func tile() -> [String] {
-        let glyphs = [["", "", "", "✦", "", "", "", ""], ["", "❯", "", "ı", "_", "", "", ""]]
-        func color(_ col: Int, row: Int) -> (r: Int, g: Int, b: Int) {
-            let t = (Double(col) + Double(row) * 0.6) / Double(width + 2)
-            let mix = { (a: Int, b: Int) in Int(Double(a) + Double(b - a) * t) }
-            return (mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b))
-        }
-        let reset = "\u{1B}[0m"
-        func edge(_ ch: String, row: Int) -> String {
-            (0..<width).map { c in c == 0 || c == width - 1 ? " " : sgr(38, color(c, row: row)) + ch + reset }.joined()
-        }
-        let middle = glyphs.enumerated().map { row, line in
-            line.enumerated().map { c, g in
-                sgr(48, color(c, row: row + 1)) + "\u{1B}[1;97m" + (g.isEmpty ? " " : g) + reset
+        shape.enumerated().map { row, line in
+            line.enumerated().map { col, ch in
+                let t = (Double(col) + Double(row) * 0.5) / Double(width + 1)
+                let mix = { (a: Int, b: Int) in Int(Double(a) + Double(b - a) * t) }
+                let bold = "✦❯ı_".contains(ch) ? "\u{1B}[1m" : ""
+                return bold + sgr(38, (mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b))) + String(ch) + "\u{1B}[0m"
             }.joined()
         }
-        return [edge("▄", row: 0)] + middle + [edge("▀", row: 3)]
     }
 
     /// A foreground (38) or background (48) color: 24-bit when the terminal says it has it, else the nearest

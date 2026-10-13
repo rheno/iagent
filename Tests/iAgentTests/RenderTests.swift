@@ -48,7 +48,7 @@ import Testing
 
     @Test func bannerIconIsAFixedSizeTextTile() {
         let rows = Logo.tile().map { $0.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression) }
-        #expect(rows == [" ▄▄▄▄▄▄ ", "   ✦    ", " ❯ ı_   ", " ▀▀▀▀▀▀ "])
+        #expect(rows == ["╭──✦──╮", "│ ❯ı_ │", "╰─────╯"])
         #expect(rows.allSatisfy { $0.reduce(0) { $0 + PromptLayout.columns($1) } == Logo.width })
     }
 
