@@ -181,7 +181,8 @@ func realPath(_ url: URL) -> URL {
     return URL(fileURLWithPath: String(cString: p))
 }
 
-/// Walks `root` yielding regular files, skipping VCS/build/dependency directories.
+/// Walks `root` yielding regular files, skipping VCS/build/dependency directories. Stops when the turn is
+/// cancelled (Ctrl-C), so a search over a large tree doesn't keep running after "Interrupted"; callers then throw.
 private func walkFiles(_ root: URL, limit: Int = 50_000, _ body: (URL) -> Bool) {
     let fm = FileManager.default
     var isDir: ObjCBool = false
@@ -190,6 +191,7 @@ private func walkFiles(_ root: URL, limit: Int = 50_000, _ body: (URL) -> Bool) 
     guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey]) else { return }
     var seen = 0
     for case let url as URL in e {
+        if Task.isCancelled { return }
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
         if values?.isDirectory == true {
             if skippedDirs.contains(url.lastPathComponent) { e.skipDescendants() }
@@ -428,6 +430,7 @@ enum Toolbox {
                 }
                 return true
             }
+            try Task.checkCancellation()
             matches.sort { $0.1 > $1.1 }
             if matches.isEmpty { return "No files matched \(pattern)" }
             let shown = matches.prefix(200).map(\.0).joined(separator: "\n")
@@ -469,6 +472,7 @@ enum Toolbox {
                       let data = try? Data(contentsOf: url), !data.prefix(8000).contains(0) else { return true }
                 let text = String(decoding: data, as: UTF8.self)
                 for (i, line) in text.components(separatedBy: "\n").enumerated() {
+                    if Task.isCancelled { return false }
                     let ns = line as NSString
                     if regex.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) != nil {
                         total += 1
@@ -479,6 +483,7 @@ enum Toolbox {
                 }
                 return true
             }
+            try Task.checkCancellation()
             let note = skippedSecrets > 0 ? "\n(\(skippedSecrets) credential/secret file(s) were not searched; use read_file on them explicitly if needed)" : ""
             if results.isEmpty { return "No matches" + note }
             return results.joined(separator: "\n") + (total > results.count ? "\n... (\(total - results.count) more matches)" : "") + note

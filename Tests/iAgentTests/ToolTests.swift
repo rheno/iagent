@@ -102,6 +102,18 @@ import Testing
     }
 }
 
+@Suite struct CancellationTests {
+    @Test func grepAndGlobStopWhenTheTurnIsCancelled() async throws {
+        let box = try Sandbox()
+        for i in 0..<20 { try box.write("f\(i).txt", "needle\n") }
+        for (tool, args) in [(Toolbox.grep, ["pattern": "needle"]), (Toolbox.glob, ["pattern": "*.txt"])] {
+            let task = Task { try await tool.run(args, box.ctx) }
+            task.cancel()
+            await #expect(throws: CancellationError.self, "\(tool.name)") { try await task.value }
+        }
+    }
+}
+
 @Suite struct DateInputTests {
     @Test func relativeOffsetsCountFromNow() throws {
         let (d, hasTime) = try DateInput.parse("+2h")
