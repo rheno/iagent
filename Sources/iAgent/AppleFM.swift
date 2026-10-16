@@ -80,7 +80,16 @@ enum AppleFM {
 
     /// Makes sure an `fm serve` answers at `url`, starting one bound to 127.0.0.1 if needed.
     static func ensureServer(at url: URL) async throws {
-        if await isUp(url) { return }
+        if await isUp(url) {
+            // Any local user can listen on a loopback port; a server another account started would receive every
+            // prompt. Without root, lsof only lists this user's processes, so an answering port it can't find isn't ours.
+            let p = String(url.port ?? port)
+            let mine = try? await runCommand(["lsof", "-nP", "-a", "-u", String(getuid()), "-iTCP:\(p)", "-sTCP:LISTEN", "-t"], timeout: 15)
+            guard let mine, !mine.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AgentError("Something not started by your account is listening on 127.0.0.1:\(p), so iAgent won't send it your prompts. Stop it, or pick another server with --base-url.")
+            }
+            return
+        }
         guard isInstalled else {
             throw AgentError("Apple Foundation Models need \(binary) (macOS 27 with Apple Intelligence). Use another provider, e.g. --provider ollama.")
         }
