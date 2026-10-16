@@ -228,6 +228,15 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(out == "-e")
     }
 
+    @Test func systemToolsDontComeFromPATH() async throws {
+        // Bare system tool names resolve to the system folder, whatever PATH says; other names are left to PATH.
+        #expect(systemExecutable("osascript")?.path == "/usr/bin/osascript")
+        #expect(systemExecutable("idevice_id-not-a-system-tool") == nil)
+        #expect(systemExecutable("/opt/homebrew/bin/idevice_id")?.path == "/opt/homebrew/bin/idevice_id")   // paths kept
+        let r = try await runCommand(["osascript", "-e", "return \"real\""])
+        #expect(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "real")
+    }
+
     @Test func argvIsNotInterpretedByAShell() async throws {
         let r = try await runCommand(["printf", "%s", "$(echo pwned); `id`"])
         #expect(r.stdout == "$(echo pwned); `id`")

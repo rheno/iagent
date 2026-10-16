@@ -37,14 +37,31 @@ struct CommandResult {
     }
 }
 
+/// Read-only system folders (protected by SIP), searched before PATH: a project folder on PATH (`.`,
+/// `./node_modules/.bin`) can't stand in for osascript, open, pbcopy or screencapture.
+let systemBinDirs = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+
+/// The program for `name`: a path as given, else the copy in a system folder, else nil (look it up on PATH).
+func systemExecutable(_ name: String) -> URL? {
+    if name.contains("/") { return URL(fileURLWithPath: name) }
+    return systemBinDirs.map { URL(fileURLWithPath: $0).appendingPathComponent(name) }
+        .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+}
+
 /// Runs a program with an explicit argv (no shell, so model-supplied arguments can't inject commands).
-/// The program is resolved on PATH via /usr/bin/env. Honors task cancellation and a timeout.
+/// System tools run from their system folder; others (Homebrew's idevice_id …) are resolved on PATH via
+/// /usr/bin/env. Honors task cancellation and a timeout.
 func runCommand(_ argv: [String], cwd: URL? = nil, timeout: Double = 60, stdin: Data? = nil,
                 mergeStderr: Bool = false) async throws -> CommandResult {
     precondition(!argv.isEmpty)
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = argv
+    if let exe = systemExecutable(argv[0]) {
+        process.executableURL = exe
+        process.arguments = Array(argv.dropFirst())
+    } else {
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = argv
+    }
     process.environment = SecretEnv.childEnvironment
     if let cwd { process.currentDirectoryURL = cwd }
 
