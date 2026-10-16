@@ -1,6 +1,6 @@
 import Foundation
 
-let version = "0.3.2"
+let version = "0.3.3"
 
 // A write to a pipe whose reader exited must fail with EPIPE instead of killing the process.
 signal(SIGPIPE, SIG_IGN)
@@ -46,7 +46,7 @@ CONFIG
 let slashCommands = [
     SlashCommand(name: "/help", args: "", summary: "show this help"),
     SlashCommand(name: "/model", args: "[id]", summary: "show or switch the model"),
-    SlashCommand(name: "/clear", args: "", summary: "start a fresh conversation"),
+    SlashCommand(name: "/clear", args: "", summary: "start a fresh conversation and clear the screen"),
     SlashCommand(name: "/tools", args: "", summary: "list available tools"),
     SlashCommand(name: "/yolo", args: "", summary: "toggle auto-approval of tool calls"),
     SlashCommand(name: "/cost", args: "", summary: "show token usage for this session"),
@@ -229,19 +229,23 @@ if let prompt = oneShot {
 
 // MARK: - Interactive REPL
 
-var banner = [Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.label) · \(provider.model)"),
-              Style.dim("  cwd: \(ctx.cwd.path)  — /help for commands")]
-if config.localOnly {
-    banner.append(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network"))
+/// The icon and greeting, built from the current state so /model and /yolo changes show after a /clear.
+func showBanner() {
+    var banner = [Style.bold("✻ iAgent \(version)") + Style.dim("  \(provider.label) · \(provider.model)"),
+                  Style.dim("  cwd: \(ctx.cwd.path)  — /help for commands")]
+    if config.localOnly {
+        banner.append(Style.green("  🔒 local-only: model on this Mac only · network tools off · bash has no network"))
+    }
+    if usesAppleFM {
+        banner.append(Style.dim("  Apple's on-device model: chat only, no file or command tools (fm serve can't call tools yet)"))
+    }
+    if permissions.autoApprove {
+        banner.append(Style.yellow("  ⚠  --yolo: tool calls run without asking (secret files, files that run code later and messages still ask)"))
+    }
+    Logo.banner(banner)
+    emit("\n")
 }
-if usesAppleFM {
-    banner.append(Style.dim("  Apple's on-device model: chat only, no file or command tools (fm serve can't call tools yet)"))
-}
-if permissions.autoApprove {
-    banner.append(Style.yellow("  ⚠  --yolo: tool calls run without asking (secret files, files that run code later and messages still ask)"))
-}
-Logo.banner(banner)
-emit("\n")
+showBanner()
 
 let editor = LineEditor.isSupported ? LineEditor(commands: slashCommands) : nil
 
@@ -282,6 +286,11 @@ while true {
             emit(slashHelp + "\n")
         case "/clear":
             agent.reset()
+            // Home, erase the screen, then erase the scrollback (3J), so the old conversation is gone from view too.
+            if LineEditor.isSupported {
+                emit("\u{1B}[H\u{1B}[2J\u{1B}[3J")
+                showBanner()
+            }
             emit(Style.dim("  Conversation cleared.\n"))
         case "/model":
             if parts.count > 1 {
