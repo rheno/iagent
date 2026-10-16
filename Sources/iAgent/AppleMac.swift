@@ -141,8 +141,10 @@ extension AppleTools {
             case "battery":
                 return try await runChecked(["pmset", "-g", "batt"])
             case "wifi":
-                let ip = (try? await runChecked(["ipconfig", "getifaddr", "en0"])) ?? "no IP on en0"
-                let summary = (try? await runChecked(["networksetup", "-getairportnetwork", "en0"])) ?? ""
+                let ports = (try? await runChecked(["networksetup", "-listallhardwareports"])) ?? ""
+                let dev = wifiDevice(ports) ?? "en0"
+                let ip = (try? await runChecked(["ipconfig", "getifaddr", dev])) ?? "no IP on \(dev)"
+                let summary = (try? await runChecked(["networksetup", "-getairportnetwork", dev])) ?? ""
                 return [summary, "IP: \(ip)"].filter { !$0.isEmpty }.joined(separator: "\n")
             case "apps":
                 return try await runOSAScript("Application('System Events').processes.whose({backgroundOnly: false}).name().join('\\n')",
@@ -162,6 +164,15 @@ extension AppleTools {
                 throw AgentError("Unknown action '\(action(args))'")
             }
         })
+
+    /// The Wi-Fi interface from `networksetup -listallhardwareports`. It is en0 on laptops, but en1 on Macs whose
+    /// built-in Ethernet takes en0 (Mac mini, iMac, Mac Studio).
+    static func wifiDevice(_ hardwarePorts: String) -> String? {
+        let lines = hardwarePorts.components(separatedBy: "\n")
+        guard let i = lines.firstIndex(where: { $0.hasPrefix("Hardware Port:") && ($0.contains("Wi-Fi") || $0.contains("AirPort")) }),
+              i + 1 < lines.count, lines[i + 1].hasPrefix("Device: ") else { return nil }
+        return String(lines[i + 1].dropFirst("Device: ".count)).trimmingCharacters(in: .whitespaces)
+    }
 
     // MARK: applescript
 

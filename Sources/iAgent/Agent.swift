@@ -99,8 +99,7 @@ final class Agent {
         let fm = FileManager.default
         let isGit = fm.fileExists(atPath: cwd.appendingPathComponent(".git").path)
         let os = ProcessInfo.processInfo.operatingSystemVersionString
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd"
+        let df = DateInput.formatter("yyyy-MM-dd")
 
         var prompt = """
         You are iAgent, an interactive command-line coding agent running in the user's terminal. \
@@ -132,8 +131,7 @@ final class Agent {
         if let model { prompt += "\n- Model: you are \(model)" }
 
         if tools.contains(where: { $0.name == "apple_devices" }) {
-            let df2 = DateFormatter()
-            df2.dateFormat = "yyyy-MM-dd HH:mm"
+            let df2 = DateInput.formatter("yyyy-MM-dd HH:mm")
             prompt += """
 
 
@@ -179,8 +177,7 @@ final class Agent {
     /// Swift?". So it gets no tools and this short prompt (about 150 tokens of its 4,096), with the current time,
     /// which it can't look up.
     static func buildChatPrompt(cwd: URL, model: String?, instructions: [ProjectFile]) -> String {
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd HH:mm"
+        let df = DateInput.formatter("yyyy-MM-dd HH:mm")
         var prompt = """
         You are iAgent, a helpful assistant in the user's Mac terminal\(model.map { ". You are \($0)" } ?? ""). \
         Answer general questions (e.g. "what is Swift?") and write code from your own knowledge, directly and briefly; \

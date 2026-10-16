@@ -114,12 +114,27 @@ import Testing
     }
 }
 
+@Suite struct WifiTests {
+    @Test func wifiInterfaceComesFromTheHardwarePortList() {
+        let desktop = "Hardware Port: Ethernet\nDevice: en0\nEthernet Address: x\n\nHardware Port: Wi-Fi\nDevice: en1\nEthernet Address: y\n"
+        #expect(AppleTools.wifiDevice(desktop) == "en1")
+        #expect(AppleTools.wifiDevice("Hardware Port: Wi-Fi\nDevice: en0\n") == "en0")
+        #expect(AppleTools.wifiDevice("Hardware Port: Ethernet\nDevice: en0\n") == nil)
+    }
+}
+
 @Suite struct DateInputTests {
     @Test func relativeOffsetsCountFromNow() throws {
         let (d, hasTime) = try DateInput.parse("+2h")
         #expect(hasTime)
         #expect(abs(d.timeIntervalSinceNow - 7200) < 5)
         #expect(abs(try DateInput.parse("+1.5d").date.timeIntervalSinceNow - 129_600) < 5)
+    }
+
+    @Test func formattedDatesAre24HourWhateverTheLocale() throws {
+        let d = try DateInput.parse("2026-10-08T21:30").date
+        #expect(DateInput.format(d) == "2026-10-08 21:30")
+        #expect(DateInput.formatter("HH:mm").locale.identifier == "en_US_POSIX")
     }
 
     @Test(arguments: ["+nanm", "+infh", "+1e300d", "+-5m", "+99999999d"])

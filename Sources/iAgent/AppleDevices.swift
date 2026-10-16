@@ -30,8 +30,7 @@ enum AppleTools {
     }
 
     static func timestampedPath(_ name: String, _ ext: String) -> String {
-        let df = DateFormatter()
-        df.dateFormat = "yyyyMMdd-HHmmss"
+        let df = DateInput.formatter("yyyyMMdd-HHmmss")
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Desktop/\(name)-\(df.string(from: Date())).\(ext)").path
     }

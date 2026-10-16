@@ -32,9 +32,17 @@ enum DateInput {
 
     static func format(_ d: Date?, time: Bool = true) -> String {
         guard let d else { return "" }
+        return formatter(time ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd").string(from: d)
+    }
+
+    /// A fixed-format formatter in local time. en_US_POSIX keeps the user's 12/24-hour setting from rewriting
+    /// `HH` into `h a` (Apple Technical Q&A QA1480) and keeps Gregorian years on other calendars.
+    static func formatter(_ format: String) -> DateFormatter {
         let df = DateFormatter()
-        df.dateFormat = time ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd"
-        return df.string(from: d)
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = .current
+        df.dateFormat = format
+        return df
     }
 }
 
