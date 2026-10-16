@@ -269,12 +269,19 @@ enum LocalOnly {
 
     /// Seatbelt profile for the bash tool: no network except loopback, no DNS, no opening apps/URLs through
     /// LaunchServices and no Apple Events (another app could send the data on our behalf).
+    /// DNS goes through mDNSResponder's Unix socket, not only its Mach services: without that rule a lookup of
+    /// `<data>.attacker.example` still leaves the Mac. Writes to iCloud Drive and File Provider folders (Dropbox,
+    /// OneDrive, Google Drive under ~/Library/CloudStorage) are denied too, since their daemons upload what lands
+    /// there. HOME is passed with `sandbox-exec -D HOME=…`.
     static let sandboxProfile = """
     (version 1)
     (allow default)
     (deny network-outbound (remote ip))
     (allow network-outbound (remote ip "localhost:*"))
+    (deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
     (deny mach-lookup (global-name "com.apple.dnssd.service") (global-name "com.apple.mDNSResponder") (global-name "com.apple.nsurlsessiond"))
+    (deny file-write* (subpath (string-append (param "HOME") "/Library/Mobile Documents"))
+                      (subpath (string-append (param "HOME") "/Library/CloudStorage")))
     (deny lsopen)
     (deny appleevent-send)
     """

@@ -613,6 +613,29 @@ func isBlocked(_ a: Approval) -> Bool {
         let ok = try await runShell("echo works", cwd: box.root, timeout: 20, sandboxed: true)
         #expect(ok == "works\n[exit code 0]")
     }
+
+    @Test func sandboxedBashCantReachTheDNSResolver() async throws {
+        // Only connects to the resolver's socket: no query is sent, so nothing leaves the Mac either way.
+        let box = try Sandbox()
+        let probe = #"python3 -I -c 'import socket; socket.socket(socket.AF_UNIX).connect("/var/run/mDNSResponder")' 2>&1 | tail -1"#
+        let out = try await runShell(probe, cwd: box.root, timeout: 20, sandboxed: true)
+        #expect(out.contains("Operation not permitted"))
+    }
+
+    @Test func sandboxedBashCantWriteToCloudSyncedFolders() async throws {
+        // A fake home, so the test never writes into the real iCloud Drive.
+        let box = try Sandbox()
+        for dir in ["home/Library/Mobile Documents/com~apple~CloudDocs", "home/Library/CloudStorage/Dropbox", "home/project"] {
+            try FileManager.default.createDirectory(at: box.root.appendingPathComponent(dir), withIntermediateDirectories: true)
+        }
+        let home = box.root.appendingPathComponent("home")
+        for dir in ["Library/Mobile Documents/com~apple~CloudDocs", "Library/CloudStorage/Dropbox"] {
+            let out = try await runShell("touch \"$PWD/x\" 2>&1", cwd: home.appendingPathComponent(dir), timeout: 20, sandboxed: true, home: home)
+            #expect(out.contains("Operation not permitted"), "\(dir)")
+        }
+        let ok = try await runShell("touch x && echo ok", cwd: home.appendingPathComponent("project"), timeout: 20, sandboxed: true, home: home)
+        #expect(ok == "ok\n[exit code 0]")
+    }
 }
 
 extension Permissions {

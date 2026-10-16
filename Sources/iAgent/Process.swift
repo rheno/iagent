@@ -129,10 +129,12 @@ func runChecked(_ argv: [String], timeout: Double = 60, stdin: Data? = nil) asyn
 }
 
 /// `sandboxed` (local-only mode) runs the shell under LocalOnly.sandboxProfile: the command and everything it
-/// starts lose network access, DNS, LaunchServices and Apple Events.
-func runShell(_ command: String, cwd: URL, timeout: Double, sandboxed: Bool = false) async throws -> String {
+/// starts lose network access, DNS, LaunchServices, Apple Events and writes to cloud-synced folders under `home`.
+func runShell(_ command: String, cwd: URL, timeout: Double, sandboxed: Bool = false,
+              home: URL = FileManager.default.homeDirectoryForCurrentUser) async throws -> String {
     let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-    let argv = (sandboxed ? ["/usr/bin/sandbox-exec", "-p", LocalOnly.sandboxProfile] : []) + [shell, "-c", command]
+    let sandbox = ["/usr/bin/sandbox-exec", "-D", "HOME=\(realPath(home).path)", "-p", LocalOnly.sandboxProfile]
+    let argv = (sandboxed ? sandbox : []) + [shell, "-c", command]
     let r = try await runCommand(argv, cwd: cwd, timeout: timeout, mergeStderr: true)
     let out = r.stdout.trimmingCharacters(in: .newlines)
     return (out.isEmpty ? "(no output)" : out) + (r.note.isEmpty ? "" : "\n" + r.note) + "\n[exit code \(r.status)]"
