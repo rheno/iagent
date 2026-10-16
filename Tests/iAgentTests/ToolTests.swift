@@ -101,3 +101,17 @@ import Testing
         for t in tools { #expect(t.schema["type"] as? String == "object", "\(t.name)") }
     }
 }
+
+@Suite struct DateInputTests {
+    @Test func relativeOffsetsCountFromNow() throws {
+        let (d, hasTime) = try DateInput.parse("+2h")
+        #expect(hasTime)
+        #expect(abs(d.timeIntervalSinceNow - 7200) < 5)
+        #expect(abs(try DateInput.parse("+1.5d").date.timeIntervalSinceNow - 129_600) < 5)
+    }
+
+    @Test(arguments: ["+nanm", "+infh", "+1e300d", "+-5m", "+99999999d"])
+    func nonsenseOffsetsAreRejected(_ input: String) {
+        #expect(throws: AgentError.self) { try DateInput.parse(input) }
+    }
+}

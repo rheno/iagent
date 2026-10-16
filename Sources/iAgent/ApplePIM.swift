@@ -11,9 +11,11 @@ enum DateInput {
     static func parse(_ s: String) throws -> (date: Date, hasTime: Bool) {
         let t = s.trimmingCharacters(in: .whitespaces)
         if t.lowercased() == "now" { return (Date(), true) }
-        if t.hasPrefix("+"), let unit = t.last, let n = Double(t.dropFirst().dropLast()) {
-            let mult: Double? = ["m": 60, "h": 3600, "d": 86400][unit]
-            if let mult { return (Date().addingTimeInterval(n * mult), true) }
+        // Plain digits only: Double() also takes "nan", "inf" and "1e300", which make dates in 4713 BC or year 506713.
+        if t.range(of: #"^\+[0-9]+(\.[0-9]+)?[mhd]$"#, options: .regularExpression) != nil,
+           let unit = t.last, let n = Double(t.dropFirst().dropLast()), let mult = ["m": 60.0, "h": 3600, "d": 86400][unit] {
+            guard n * mult <= 100 * 365 * 86400 else { throw AgentError("'\(s)' is more than 100 years away.") }
+            return (Date().addingTimeInterval(n * mult), true)
         }
         let iso = ISO8601DateFormatter()
         if let d = iso.date(from: t) { return (d, true) }
