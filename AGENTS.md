@@ -5,7 +5,7 @@ system prompt when run from this directory, so keep it short and accurate.
 
 ## What this is
 
-iAgent (`iagent`, v0.3.1) is a terminal coding agent written in Swift, in the style of Claude Code. It talks to
+iAgent (`iagent`, v0.3.2) is a terminal coding agent written in Swift, in the style of Claude Code. It talks to
 either the Anthropic Messages API or any OpenAI-compatible Chat Completions server, and gives the model:
 
 - **Coding tools:** `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`, `web_fetch`

@@ -7,7 +7,7 @@
     <key>CFBundleName</key>
     <string>iagent</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.3.1</string>
+    <string>0.3.2</string>
     <key>NSRemindersFullAccessUsageDescription</key>
     <string>iagent reads and creates reminders when you ask it to.</string>
     <key>NSRemindersUsageDescription</key>

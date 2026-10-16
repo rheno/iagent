@@ -1,6 +1,6 @@
 import Foundation
 
-let version = "0.3.1"
+let version = "0.3.2"
 
 // A write to a pipe whose reader exited must fail with EPIPE instead of killing the process.
 signal(SIGPIPE, SIG_IGN)
