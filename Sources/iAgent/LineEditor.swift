@@ -449,7 +449,9 @@ final class LineEditor {
         if ctrl || alt || other {
             let lower = Character(scalar).lowercased()
             switch (ctrl, alt, other) {
-            case (true, false, false) where ("a"..."z").contains(lower): return controlKey(UInt8(code | 0x20) & 0x1F)
+            // ASCII letters only: ("a"..."z").contains compares strings, so it also took the Kelvin sign (K, lowercased
+            // "k") and İ ("i̇"), whose codes don't fit in UInt8 and trapped.
+            case (true, false, false) where code < 0x80 && scalar.properties.isAlphabetic: return controlKey(UInt8(code) & 0x1F)
             case (false, true, false) where lower == "b": return .wordLeft
             case (false, true, false) where lower == "f": return .wordRight
             default: return .ignore

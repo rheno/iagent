@@ -103,4 +103,12 @@ import Testing
         #expect(LineEditor.encodedKey("98;3u") == K.wordLeft && LineEditor.encodedKey("27u") == K.escape)
         #expect(LineEditor.encodedKey("57399u") == K.ignore && LineEditor.encodedKey("200~") == nil)
     }
+
+    @Test func ctrlWithANonASCIILetterIsIgnoredNotACrash() {
+        typealias K = LineEditor.Key
+        // Kelvin sign and İ lowercase to "k" and "i̇", which used to pass the a…z check and overflow UInt8.
+        #expect(LineEditor.encodedKey("8490;5u") == K.ignore)
+        #expect(LineEditor.encodedKey("304;5u") == K.ignore)
+        #expect(LineEditor.encodedKey("65;5u") == K.home)                  // Ctrl-Shift-A still works
+    }
 }
