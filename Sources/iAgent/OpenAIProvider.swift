@@ -44,13 +44,19 @@ final class OpenAICompatibleProvider: LLMProvider {
         if let apiKey, !apiKey.isEmpty { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = try JSON.data(body)
+        return try await parse(HTTP.streamLines(req), callbacks: callbacks)
+    }
 
+    /// Builds the turn from the SSE lines.
+    func parse<Lines: AsyncSequence>(_ lines: Lines, callbacks: StreamCallbacks) async throws -> AssistantTurn
+    where Lines.Element == String {
         var turn = AssistantTurn()
         var calls: [Int: (id: String, name: String, args: String)] = [:]
+        var done = false
 
-        for try await line in try await HTTP.streamLines(req) {
+        for try await line in lines {
             guard let payload = HTTP.sseData(line) else { continue }
-            if payload == "[DONE]" { break }
+            if payload == "[DONE]" { done = true; break }
             guard let obj = JSON.object(payload) else { continue }
             if let err = obj["error"] { throw AgentError("Provider error: \(JSON.string(err))") }
 
@@ -89,6 +95,11 @@ final class OpenAICompatibleProvider: LLMProvider {
             }
         }
 
+        // A stream that ends with neither `[DONE]` nor a finish_reason was cut off (dropped connection, proxy
+        // timeout): its text is incomplete and its tool calls may be too, as in AnthropicProvider.parse.
+        guard done || turn.stopReason != nil else {
+            throw AgentError("The connection to the model dropped before its reply finished, so the partial reply was discarded. Send your message again.")
+        }
         turn.toolCalls = calls.keys.sorted().compactMap { idx in
             guard let c = calls[idx], !c.name.isEmpty else { return nil }
             let id = c.id.isEmpty ? "call_\(idx)_\(UUID().uuidString.prefix(8))" : c.id

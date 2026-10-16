@@ -569,6 +569,19 @@ func isBlocked(_ a: Approval) -> Bool {
         let noStopEvent = try await p.parse(lines(Array(done.dropLast())), callbacks: quiet)
         #expect(noStopEvent.text == "Hel")
     }
+
+    @Test func aDroppedOpenAIStreamIsAnErrorNotAFinishedTurn() async throws {
+        let p = OpenAICompatibleProvider(baseURL: URL(string: "https://api.example.com")!, apiKey: nil, model: "m",
+                                         maxTokens: nil, extraHeaders: [:])
+        let quiet = StreamCallbacks(onText: { _ in }, onThinking: { _ in })
+        let partial: [[String: Any]] = [["choices": [["delta": ["content": "Hel"]]]]]
+        await #expect(throws: AgentError.self) { try await p.parse(lines(partial), callbacks: quiet) }
+        // Either a finish_reason or [DONE] finishes the turn.
+        let finished = partial + [["choices": [["delta": [:], "finish_reason": "stop"]]]]
+        #expect(try await p.parse(lines(finished), callbacks: quiet).text == "Hel")
+        let done = AsyncStream<String> { c in c.yield("data: " + JSON.string(partial[0])); c.yield("data: [DONE]"); c.finish() }
+        #expect(try await p.parse(done, callbacks: quiet).text == "Hel")
+    }
 }
 
 // MARK: - Local-only mode: nothing leaves this Mac
