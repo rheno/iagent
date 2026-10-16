@@ -204,13 +204,17 @@ enum Redact {
     /// Registers the values whose names say they hold a credential (env vars, custom HTTP headers such as a
     /// gateway's `Authorization` or `X-Api-Key`). For `Bearer <token>`-style values the token is registered too.
     static func registerCredentials(_ values: [String: String]) {
-        let name = try! NSRegularExpression(pattern: "(KEY|TOKEN|SECRET|PASSW(OR)?D|CREDENTIAL|AUTH|COOKIE)", options: .caseInsensitive)
-        for (k, v) in values where name.firstMatch(in: k, range: NSRange(k.startIndex..., in: k)) != nil {
+        for (k, v) in values where isCredentialName(k) {
             register(v)
             if let scheme = v.range(of: #"^(?i)(bearer|basic|token)\s+"#, options: .regularExpression) {
                 register(String(v[scheme.upperBound...]))
             }
         }
+    }
+
+    /// Whether a variable or header name says it holds a credential (`OPENAI_API_KEY`, `Authorization`, `X-Api-Key`).
+    static func isCredentialName(_ name: String) -> Bool {
+        name.range(of: "(KEY|TOKEN|SECRET|PASSW(OR)?D|CREDENTIAL|AUTH|COOKIE)", options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     static let mask = "[REDACTED]"

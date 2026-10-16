@@ -264,6 +264,29 @@ func isBlocked(_ a: Approval) -> Bool {
 
 // MARK: - Transport (CWE-319)
 
+@Suite struct ConfigFileTests {
+    private func warnings(_ json: String, mode: Int) throws -> [String] {
+        let box = try Sandbox()
+        try box.write("config.json", json)
+        let url = box.root.appendingPathComponent("config.json")
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+        var c = Config()
+        try c.loadFile(url)
+        return c.warnings
+    }
+
+    @Test func readableConfigWithACredentialWarns() throws {
+        #expect(try warnings(#"{"apiKey": "sk-x"}"#, mode: 0o644).first?.contains("an apiKey") == true)
+        #expect(try warnings(#"{"headers": {"Authorization": "Bearer x"}}"#, mode: 0o644).first?.contains("Authorization header") == true)
+        #expect(try warnings(#"{"profiles": {"gw": {"headers": {"X-Api-Key": "x"}}}}"#, mode: 0o644).first?.contains("X-Api-Key") == true)
+    }
+
+    @Test func privateConfigOrHarmlessHeadersDontWarn() throws {
+        #expect(try warnings(#"{"headers": {"Authorization": "Bearer x"}}"#, mode: 0o600).isEmpty)
+        #expect(try warnings(#"{"headers": {"X-Title": "iagent"}}"#, mode: 0o644).isEmpty)
+    }
+}
+
 @Suite struct TransportTests {
     @Test(arguments: ["http://localhost:11434/v1", "http://127.0.0.1:1234", "http://192.168.1.20:8000",
                       "http://10.0.0.5", "http://172.20.0.1", "http://mybox.local:8080"])

@@ -50,23 +50,26 @@ struct Config {
     static let path = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".iagent/config.json")
 
-    mutating func loadFile() throws {
-        guard let data = try? Data(contentsOf: Self.path) else { return }
+    mutating func loadFile(_ path: URL = Self.path) throws {
+        guard let data = try? Data(contentsOf: path) else { return }
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            throw AgentError("Could not parse \(Self.path.path)")
+            throw AgentError("Could not parse \(path.path)")
         }
         // A plaintext key in a file others can read is a credential leak (CWE-732); ssh applies the same rule.
-        if String(decoding: data, as: UTF8.self).contains("\"apiKey\""),
-           let perms = (try? FileManager.default.attributesOfItem(atPath: Self.path.path))?[.posixPermissions] as? Int,
+        // A gateway token in `headers` (Authorization, X-Api-Key), top level or in a profile, counts too.
+        let headerSets = [obj["headers"]] + ((obj["profiles"] as? [String: [String: Any]])?.values.map { $0["headers"] } ?? [])
+        let secretHeader = headerSets.compactMap { $0 as? [String: Any] }.flatMap(\.keys).first(where: Redact.isCredentialName)
+        let what = String(decoding: data, as: UTF8.self).contains("\"apiKey\"") ? "an apiKey" : secretHeader.map { "a \($0) header" }
+        if let what, let perms = (try? FileManager.default.attributesOfItem(atPath: path.path))?[.posixPermissions] as? Int,
            perms & 0o077 != 0 {
-            warnings.append("\(Self.path.path) contains an apiKey and is readable by other users (mode \(String(perms, radix: 8))). Run: chmod 600 \(Self.path.path) — or store the key in the Keychain (apiKeyKeychain).")
+            warnings.append("\(path.path) contains \(what) and is readable by other users (mode \(String(perms, radix: 8))). Run: chmod 600 \(path.path) — or store the key in the Keychain (apiKeyKeychain).")
         }
         // A config may define named profiles: {"profile": "local", "profiles": {"local": {...}}}
         var values = obj
         if let profiles = obj["profiles"] as? [String: [String: Any]] {
             let selected = ProcessInfo.processInfo.environment["IAGENT_PROFILE"] ?? obj["profile"] as? String
             if let selected {
-                guard let p = profiles[selected] else { throw AgentError("Profile '\(selected)' not found in \(Self.path.path)") }
+                guard let p = profiles[selected] else { throw AgentError("Profile '\(selected)' not found in \(path.path)") }
                 values.merge(p) { _, new in new }
             }
         }
