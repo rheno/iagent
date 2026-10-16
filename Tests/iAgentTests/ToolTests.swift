@@ -102,6 +102,27 @@ import Testing
     }
 }
 
+@Suite struct SymlinkWriteTests {
+    @Test func editsGoThroughASymlinkToItsTarget() async throws {
+        let box = try Sandbox()
+        try box.write("shared/config.txt", "old\n")
+        let target = box.root.appendingPathComponent("shared/config.txt")
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: target.path)
+        try FileManager.default.createSymbolicLink(atPath: box.root.appendingPathComponent("link.txt").path,
+                                                   withDestinationPath: "shared/config.txt")
+
+        let out = try await Toolbox.editFile.run(["path": "link.txt", "old_string": "old", "new_string": "new"], box.ctx)
+        #expect(out == "Edited link.txt (1 replacement)")
+        #expect(try String(contentsOf: target, encoding: .utf8) == "new\n")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: box.root.appendingPathComponent("link.txt").path) == "shared/config.txt")
+        #expect((try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int) == 0o640)
+
+        _ = try await Toolbox.writeFile.run(["path": "link.txt", "content": "rewritten\n"], box.ctx)
+        #expect(try String(contentsOf: target, encoding: .utf8) == "rewritten\n")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: box.root.appendingPathComponent("link.txt").path) == "shared/config.txt")
+    }
+}
+
 @Suite struct CancellationTests {
     @Test func grepAndGlobStopWhenTheTurnIsCancelled() async throws {
         let box = try Sandbox()

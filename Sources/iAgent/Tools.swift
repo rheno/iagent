@@ -137,11 +137,27 @@ struct ToolContext {
         return cwd.appendingPathComponent(expanded).standardizedFileURL
     }
 
+    /// The path relative to the working directory when it is inside it. The cwd is resolved (`/private/tmp/x`), but
+    /// `resolve` returns standardized URLs, which drop `/private` again (`/tmp/x`), so both spellings are tried.
     func display(_ url: URL) -> String {
         let p = url.path
-        let base = cwd.path.hasSuffix("/") ? cwd.path : cwd.path + "/"
-        return p.hasPrefix(base) ? String(p.dropFirst(base.count)) : p
+        for root in [cwd.path, cwd.standardizedFileURL.path] {
+            let base = root.hasSuffix("/") ? root : root + "/"
+            if p.hasPrefix(base) { return String(p.dropFirst(base.count)) }
+        }
+        return p
     }
+}
+
+/// Writes `content` to the file `url` names. A symlink is written through to its target, the file PathPolicy
+/// approved, instead of being replaced by a regular file (an atomic write renames a new file over the path, which
+/// replaced the link and left the target unchanged). An existing file keeps its permissions.
+func writeThrough(_ content: String, to url: URL) throws {
+    let target = PathPolicy.canonical(url)
+    let mode = (try? FileManager.default.attributesOfItem(atPath: target.path))?[.posixPermissions]
+    try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try content.write(to: target, atomically: true, encoding: .utf8)
+    if let mode { try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: target.path) }
 }
 
 // MARK: - Argument helpers
@@ -353,8 +369,7 @@ enum Toolbox {
             let url = ctx.resolve(try str(args, "path"))
             let content = try str(args, "content")
             let existed = FileManager.default.fileExists(atPath: url.path)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try content.write(to: url, atomically: true, encoding: .utf8)
+            try writeThrough(content, to: url)
             let n = content.components(separatedBy: "\n").count
             return "\(existed ? "Overwrote" : "Created") \(ctx.display(url)) (\(n) lines)"
         })
@@ -402,7 +417,7 @@ enum Toolbox {
                 let r = content.range(of: old)!
                 updated = content.replacingCharacters(in: r, with: new)
             }
-            try updated.write(to: url, atomically: true, encoding: .utf8)
+            try writeThrough(updated, to: url)
             return "Edited \(ctx.display(url)) (\(all ? count : 1) replacement\(all && count > 1 ? "s" : ""))"
         })
 
