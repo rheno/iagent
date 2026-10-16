@@ -47,6 +47,8 @@ On top of the coding tools, the agent gets tools for your whole Apple setup. Jus
   means No. `--yolo` skips the menu.
 - `messages` always asks before each message, even with `--yolo`, and can't be used in non-interactive runs. The same goes for writing shell-startup files.
 - Secret files (`.env`, SSH/cloud keys) are never read for a cloud model. With `--local` they can be read after confirming each time.
+- A hard-linked file inside the project asks before it is read, since a hard link can't be traced to its other
+  names (it could be `~/.aws/credentials`). `grep` skips such files unless you search that file.
 
 **Not possible from macOS:**
 - Find My locations.
@@ -91,7 +93,8 @@ Apple's on-device model, the context use) on the right. ↑/↓ recall earlier i
 in memory only, never written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ctrl-L work as in a shell.
 For a new line, press Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not
 submitted until you press Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and
-Ctrl-C during a turn stops it, including at an approval menu (the tool call is then refused).
+Ctrl-C during a turn stops it, including a long `grep`/`glob` search or an approval menu (the tool call is then
+refused).
 
 Output looks like Claude Code's. Replies start with ⏺ and are rendered as markdown (headings, lists, code, bold,
 links). Tool calls show as `Read(…)`, `Update(…)`, `Search(…)` or `Bash(…)`, with a short result such as
@@ -110,6 +113,11 @@ instruction files), iagent replaces credentials with `[REDACTED]` and tells you 
 Secret files are never read for a cloud model at all. Masking is pattern-based. A secret in an unusual format can
 still get through, so for confidential work use local-only mode.
 
+**System tools can't be swapped out.** `osascript`, `open`, `pbcopy`, `say`, `screencapture` and the other macOS
+tools always run from `/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`, so a folder on your PATH (`.`,
+`./node_modules/.bin`) can't put its own copy in their place. Tools from elsewhere, such as Homebrew's
+`idevice_id`, are still found on PATH.
+
 **Local-only mode keeps everything on this Mac.** Turn it on with `iagent --local`, `"localOnly": true` in the config,
 or `IAGENT_LOCAL_ONLY=1`. In this mode:
 
@@ -120,8 +128,12 @@ or `IAGENT_LOCAL_ONLY=1`. In this mode:
   `ios_device`, `apple_devices`.
 - Actions that sync through iCloud or reach other devices are blocked: reminder/calendar/note changes,
   `mac open`, `mac clipboard_set` (Universal Clipboard), `simulator openurl`/`raw`.
-- `bash` runs in a macOS sandbox. It can't connect to anything but localhost, resolve DNS names, open apps or URLs, or
-  send Apple Events. Builds, git, and tests that don't need the network work normally.
+- `bash` runs in a macOS sandbox. It can't connect to anything but localhost, resolve DNS names (so data can't leave
+  inside a hostname), open apps or URLs, send Apple Events, or write to cloud-synced folders (iCloud Drive, and
+  Dropbox, OneDrive or Google Drive under `~/Library/CloudStorage`). `localhost` still resolves. Builds, git, and tests
+  that don't need the network work normally.
+- Keep the project itself out of synced folders (for example `~/Documents` with iCloud Desktop & Documents on): there,
+  every file change is uploaded, whatever mode iAgent runs in.
 
 ## Running offline with a local model
 
@@ -135,7 +147,8 @@ iagent --local         # or just `iagent` when no API key is set
 ```
 
 iAgent starts `fm serve` on `127.0.0.1:8642` and stops it again when it exits. If a server is already listening
-there, iAgent uses that one. To run your own server, start it with `fm serve --port <n>` and pass
+there, iAgent uses it only if your own account started it; on a shared Mac, another user's server is refused, since
+it would receive your prompts. To run your own server, start it with `fm serve --port <n>` and pass
 `--base-url http://127.0.0.1:<n>/v1 -m system`.
 
 With `fm`, iAgent is a chat assistant only: no file, command or Apple tools. On macOS 27.0, `fm serve` can't call
@@ -244,7 +257,7 @@ Store the API key in the macOS Keychain instead of the file:
 security add-generic-password -s iagent-anthropic -a iagent -w   # prompts for the key
 ```
 
-Then reference it in the profile: `{ "provider": "anthropic", "apiKeyKeychain": "iagent-anthropic" }`. Never put a plaintext `apiKey` in the file. If you must, `chmod 600 ~/.iagent/config.json`; iAgent warns if other users can read it.
+Then reference it in the profile: `{ "provider": "anthropic", "apiKeyKeychain": "iagent-anthropic" }`. Never put a plaintext `apiKey` in the file. If you must, `chmod 600 ~/.iagent/config.json`; iAgent warns if other users can read a config that holds an `apiKey` or a credential header such as `Authorization` or `X-Api-Key`.
 
 Remote servers must use `https://`. Plain `http://` is accepted only for localhost/LAN servers such as Ollama and LM Studio.
 
@@ -286,7 +299,7 @@ Sources/iAgent/
   OpenAIProvider.swift     Chat Completions streaming + tool calls
   AnthropicProvider.swift  Messages API streaming + tool_use/tool_result
   Tools.swift              coding tools + permission/approval checks
-  Process.swift            argv-based process runner, osascript bridge
+  Process.swift            argv-based process runner (system tools from system folders), osascript bridge
   AppleDevices.swift       apple_devices, ios_device, simulator, airdrop (+ Bonjour, AirDrop helper)
   ApplePIM.swift           reminders, calendar, contacts, notes, messages
   AppleMac.swift           shortcuts, mac, applescript
@@ -294,7 +307,8 @@ Sources/iAgent/
   Security.swift           output sanitizer, path policy, secret scrubbing, transport rules
 Tests/iAgentTests/
   SecurityTests.swift      regression tests for every control in SECURITY.md
-  ToolTests.swift          coding-tool behavior (read/write/edit/glob/grep/bash/web_fetch, invalid JSON)
+  ToolTests.swift          coding-tool behavior (read/write/edit/glob/grep/bash/web_fetch, invalid JSON, Ctrl-C),
+                           date parsing, Wi-Fi interface lookup
   AppleFMTests.swift       Apple on-device model: context fitting, chat prompt, fm schema, apple_fm approvals
   RenderTests.swift        markdown rendering, tool result lines, spinner text, banner icon
   LineEditorTests.swift    prompt editing, history, / completion and wrapping
