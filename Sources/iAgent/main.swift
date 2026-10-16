@@ -148,8 +148,10 @@ let tools = usesAppleFM ? [] : Toolbox.all(apple: config.appleToolsEnabled, loca
 Redact.registerEnvironment()
 
 if let direct = directTool {
+    // No model is involved, so the tools don't depend on the provider (Apple's `fm` gets none in chat).
     let call = ToolCall(id: "direct", name: direct.name, arguments: direct.args)
-    let (output, isError) = await Toolbox.execute(call, tools: tools, ctx: ctx)
+    let all = Toolbox.all(apple: config.appleTools ?? true, localOnly: config.localOnly)
+    let (output, isError) = await Toolbox.execute(call, tools: all, ctx: ctx)
     print("\n" + Sanitize.terminal(output))
     exit(isError ? 1 : 0)
 }
