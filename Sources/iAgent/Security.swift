@@ -131,10 +131,18 @@ enum PathPolicy {
         return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/") ? .inside : .outside
     }
 
+    /// A regular file with more than one hard link. Unlike a symlink, a hard link can't be followed to see what else
+    /// it is (a link inside the project to ~/.aws/credentials looks like any project file), so it isn't free to read.
+    static func hasOtherLinks(_ url: URL) -> Bool {
+        var st = stat()
+        return stat(url.path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG && st.st_nlink > 1
+    }
+
     /// Approval for reading/listing: free inside the project, confirmed outside it, always confirmed for secrets.
     static func readApproval(_ path: String?, _ ctx: ToolContext) -> Approval {
-        switch zone(ctx.resolve(path ?? "."), cwd: ctx.cwd) {
-        case .inside: return .none
+        let url = ctx.resolve(path ?? ".")
+        switch zone(url, cwd: ctx.cwd) {
+        case .inside: return hasOtherLinks(url) ? .askScoped("hard-linked file: \(canonical(url).path)") : .none
         case .outside: return outsideScope(ctx.resolve(path ?? "."))
         case .sensitive:
             // A cloud model provider must never receive a secret file; a model on this Mac may, with confirmation.

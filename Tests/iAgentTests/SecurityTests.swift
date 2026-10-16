@@ -98,6 +98,22 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(isBlocked(PathPolicy.readApproval(".ENV", box.ctx)))
     }
 
+    @Test func hardLinksInsideTheProjectAreNotFreeToRead() async throws {
+        // A hard link can't be followed like a symlink: `notes.txt` may be ~/.aws/credentials under another name.
+        let box = try Sandbox()
+        try box.write("outside/secret", "aws_secret=xyz\n")
+        let project = box.root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try FileManager.default.linkItem(at: box.root.appendingPathComponent("outside/secret"), to: project.appendingPathComponent("notes.txt"))
+        try "aws_secret=plain\n".write(to: project.appendingPathComponent("plain.txt"), atomically: true, encoding: .utf8)
+        let ctx = ToolContext(cwd: realPath(project), permissions: Permissions(autoApprove: false))
+
+        guard case .askScoped = PathPolicy.readApproval("notes.txt", ctx) else { Issue.record("hard link read is free"); return }
+        #expect(PathPolicy.readApproval("plain.txt", ctx) == .none)
+        let out = try await Toolbox.grep.run(["pattern": "aws_secret"], ctx)
+        #expect(out.contains("plain.txt") && !out.contains("notes.txt") && out.contains("1 hard-linked file"))
+    }
+
     @Test func caseFoldedLookalikesOfNewFilesAreCaught() throws {
         // APFS folds ſ (long s) to s and K (Kelvin sign) to k: creating `.zſhrc` creates the file zsh loads as `.zshrc`.
         let box = try Sandbox()

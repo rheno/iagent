@@ -461,9 +461,11 @@ enum Toolbox {
             let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
             var results: [String] = []
             var total = 0
-            var skippedSecrets = 0
+            var skippedSecrets = 0, skippedLinked = 0
             walkFiles(root) { url in
                 if PathPolicy.isSensitive(url) { skippedSecrets += 1; return true }
+                // A hard-linked file needs read_file's approval (PathPolicy.hasOtherLinks), unless it was the path asked for.
+                if url != root && PathPolicy.hasOtherLinks(url) { skippedLinked += 1; return true }
                 if let filter {
                     let rel = url.path.hasPrefix(prefix) ? String(url.path.dropFirst(prefix.count)) : url.lastPathComponent
                     if !globMatch(filter, rel) && !globMatch(filter, url.lastPathComponent) { return true }
@@ -484,7 +486,8 @@ enum Toolbox {
                 return true
             }
             try Task.checkCancellation()
-            let note = skippedSecrets > 0 ? "\n(\(skippedSecrets) credential/secret file(s) were not searched; use read_file on them explicitly if needed)" : ""
+            var note = skippedSecrets > 0 ? "\n(\(skippedSecrets) credential/secret file(s) were not searched; use read_file on them explicitly if needed)" : ""
+            if skippedLinked > 0 { note += "\n(\(skippedLinked) hard-linked file(s) were not searched; use read_file on them explicitly if needed)" }
             if results.isEmpty { return "No matches" + note }
             return results.joined(separator: "\n") + (total > results.count ? "\n... (\(total - results.count) more matches)" : "") + note
         })
