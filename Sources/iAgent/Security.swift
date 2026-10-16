@@ -80,10 +80,11 @@ enum PathPolicy {
         return resolved.standardizedFileURL
     }
 
-    /// The canonical path, lowercased for matching: APFS is case-insensitive by default, so `.ZLOGIN` or `.ENVRC`
-    /// is the file zsh or direnv loads. canonical() restores the real case only for files that already exist.
+    /// The canonical path, case-folded for matching: APFS is case-insensitive by default, so `.ZLOGIN` or `.ENVRC`
+    /// is the file zsh or direnv loads. It folds like Unicode case folding, not lowercased(): `.zſhrc` (long s,
+    /// U+017F) is the file zsh opens as `.zshrc`. canonical() restores the real case only for files that already exist.
     private static func matchPath(_ url: URL) -> (path: String, name: String) {
-        let path = canonical(url).path.lowercased()
+        let path = canonical(url).path.folding(options: [.caseInsensitive], locale: nil)
         return (path, (path as NSString).lastPathComponent)
     }
 

@@ -98,6 +98,14 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(isBlocked(PathPolicy.readApproval(".ENV", box.ctx)))
     }
 
+    @Test func caseFoldedLookalikesOfNewFilesAreCaught() throws {
+        // APFS folds ſ (long s) to s and K (Kelvin sign) to k: creating `.zſhrc` creates the file zsh loads as `.zshrc`.
+        let box = try Sandbox()
+        for path in [".zſhrc", ".baſh_profile", ".baſh_login", "~/.ſsh-not-there/../.zſhenv", "\u{212A}ey.pem"] {
+            #expect(isSensitive(PathPolicy.writeApproval(path, box.ctx)), "\(path)")
+        }
+    }
+
     @Test func submoduleAndWorktreeGitFilesRunCodeLater() throws {
         let box = try Sandbox()
         for path in [".git/modules/sub/hooks/post-checkout", ".git/modules/sub/config", ".git/worktrees/w/config.worktree"] {
