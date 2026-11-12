@@ -2,3 +2,14 @@
 .swiftpm/
 dist/
 .DS_Store
+
+# Never commit secrets or signing material
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+*.provisionprofile

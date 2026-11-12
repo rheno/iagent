@@ -48,6 +48,7 @@ Info.plist                 bundle id dev.iagent.cli, version, TCC privacy usage 
 iAgent.entitlements        Apple Events, Calendars/Reminders, Contacts — nothing else
 scripts/build-release.sh   release build + hardened-runtime codesign → dist/iagent (SIGN_IDENTITY for Developer ID)
 assets/                    logos, app icon, README screenshot
+LICENSE, NOTICE            Apache License 2.0 and attribution notice
 Sources/iAgent/
   main.swift               top-level script: flag parsing, config merge, --run-tool, one-shot mode, REPL + slash cmds (add new ones to `slashCommands` so /help and the menu list them)
   LineEditor.swift         raw-mode prompt: LineBuffer editing, in-memory InputHistory, SlashCompletion menu, PromptLayout,

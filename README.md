@@ -4,7 +4,38 @@
 
 <h1 align="center">iAgent</h1>
 
-A Claude-Code-style terminal agent written in Swift, with no third-party dependencies. It is wired into the Apple ecosystem: Mac, iPhone, iPad, Watch, Apple TV, AirPods, iCloud data. You can point it at any model:
+<p align="center">
+  <strong>A security-first terminal coding agent for macOS, wired into the Apple ecosystem.</strong>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey.svg" alt="Platform: macOS 14+">
+  <img src="https://img.shields.io/badge/Swift-5.9%2B-orange.svg" alt="Swift 5.9+">
+  <img src="https://img.shields.io/badge/dependencies-none-brightgreen.svg" alt="No third-party dependencies">
+</p>
+
+## Contents
+
+- [Overview](#overview)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Apple ecosystem](#apple-ecosystem)
+- [Keeping data private](#keeping-data-private)
+- [Running offline with a local model](#running-offline-with-a-local-model)
+- [Choosing a model](#choosing-a-model)
+- [Config file](#config-file)
+- [Project instructions](#project-instructions)
+- [Anthropic specifics](#anthropic-specifics)
+- [Development](#development)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+## Overview
+
+iAgent is a Claude-Code-style terminal agent written in Swift, with no third-party dependencies. It is wired into the Apple ecosystem: Mac, iPhone, iPad, Watch, Apple TV, AirPods, iCloud data. You can point it at any model:
 
 - **Any OpenAI-compatible server**: OpenAI, OpenRouter, Ollama, LM Studio, vLLM, LiteLLM, Groq, DeepSeek, Together, …
 - **Anthropic API** (native Messages API with streaming, adaptive thinking, and prompt caching)
@@ -15,6 +46,48 @@ The coding tools are `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `ba
 <p align="center">
   <img src="assets/screenshot-session.png" width="820" alt="iAgent session: bumping a version with an approved edit, refusing to read .env, and a numbered approval menu before adding a reminder">
 </p>
+
+## Requirements
+
+- macOS 14 or later (Apple's on-device model needs macOS 27 with Apple Intelligence)
+- Swift 5.9 or later (Xcode or the Command Line Tools)
+- Optional: Xcode, for iPhone/iPad management and simulators
+- A model: an API key for a cloud provider, or a local server such as Ollama, LM Studio or mlx-lm
+
+## Installation
+
+```bash
+git clone https://github.com/rheno/iagent.git
+cd iagent
+scripts/build-release.sh                   # release build, signed with the hardened runtime → dist/iagent
+cp dist/iagent /usr/local/bin/             # or anywhere on PATH
+iagent --help
+```
+
+## Usage
+
+```bash
+iagent                                  # interactive session
+iagent "explain this repo"              # interactive, starting with a prompt
+iagent -p "fix the failing test" --yolo # one-shot, auto-approve tools
+git diff | iagent -p "review this diff" # one-shot from stdin
+```
+
+REPL commands: `/help`, `/model [id]`, `/clear`, `/tools`, `/yolo`, `/cost`, `/exit`. Type `/` to open a command
+menu that filters as you type: ↑/↓ choose, Tab completes, Enter runs, Esc closes.
+
+The prompt is a full line editor in a framed input box. The row under it lists the main keys, with the model (or, for
+Apple's on-device model, the context use) on the right. ↑/↓ recall earlier inputs from this session (history is kept
+in memory only, never written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ctrl-L work as in a shell.
+For a new line, press Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not
+submitted until you press Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and
+Ctrl-C during a turn stops it, including a long `grep`/`glob` search or an approval menu (the tool call is then
+refused).
+
+Output looks like Claude Code's. Replies start with ⏺ and are rendered as markdown (headings, lists, code, bold,
+links). Tool calls show as `Read(…)`, `Update(…)`, `Search(…)` or `Bash(…)`, with a short result such as
+`⎿ Found 5 files`. While iAgent waits, a ✦ "Thinking…" line glows in Apple Intelligence colors with the elapsed time.
+Piped output (`-p`) stays plain text.
 
 ## Apple ecosystem
 
@@ -65,41 +138,6 @@ iagent --run-tool apple_devices '{}'
 iagent --run-tool reminders '{"action":"lists"}'
 iagent --run-tool mac '{"action":"battery"}'
 ```
-
-## Build & install
-
-```bash
-cd iAgent
-scripts/build-release.sh                   # release build, signed with the hardened runtime → dist/iagent
-cp dist/iagent /usr/local/bin/             # or anywhere on PATH
-```
-
-Requires macOS 14+ and Swift 5.9+. Xcode is optional but needed for iPhone/iPad management and simulators.
-
-## Usage
-
-```bash
-iagent                                  # interactive session
-iagent "explain this repo"              # interactive, starting with a prompt
-iagent -p "fix the failing test" --yolo # one-shot, auto-approve tools
-git diff | iagent -p "review this diff" # one-shot from stdin
-```
-
-REPL commands: `/help`, `/model [id]`, `/clear`, `/tools`, `/yolo`, `/cost`, `/exit`. Type `/` to open a command
-menu that filters as you type: ↑/↓ choose, Tab completes, Enter runs, Esc closes.
-
-The prompt is a full line editor in a framed input box. The row under it lists the main keys, with the model (or, for
-Apple's on-device model, the context use) on the right. ↑/↓ recall earlier inputs from this session (history is kept
-in memory only, never written to disk). ←/→, Option-←/→ (by word), Ctrl-A/E, Ctrl-U/K/W and Ctrl-L work as in a shell.
-For a new line, press Ctrl-J or Option-Enter, or end the line with `\`. Pasted text keeps its newlines and is not
-submitted until you press Enter. Ctrl-C clears the input, Ctrl-C twice on an empty prompt (or Ctrl-D) exits, and
-Ctrl-C during a turn stops it, including a long `grep`/`glob` search or an approval menu (the tool call is then
-refused).
-
-Output looks like Claude Code's. Replies start with ⏺ and are rendered as markdown (headings, lists, code, bold,
-links). Tool calls show as `Read(…)`, `Update(…)`, `Search(…)` or `Bash(…)`, with a short result such as
-`⎿ Found 5 files`. While iAgent waits, a ✦ "Thinking…" line glows in Apple Intelligence colors with the elapsed time.
-Piped output (`-p`) stays plain text.
 
 ## Keeping data private
 
@@ -285,7 +323,19 @@ Non-interactive runs (`-p` with piped input, CI) can't ask, so they load instruc
 
   Neither is sent through custom gateways.
 
-## Layout
+## Development
+
+```bash
+swift build                                         # debug build → .build/debug/iagent
+swift test < /dev/null                              # run the test suite
+.build/debug/iagent --run-tool glob '{"pattern":"**/*.swift"}'   # exercise a tool without a model or API key
+```
+
+Redirecting stdin for `swift test` makes the session non-interactive, which enables the tests that check approvals
+are refused without a terminal. The tests don't cover the providers' HTTP streaming or the Apple tools (privacy
+prompts, Xcode, real devices); exercise those by hand with `--run-tool`.
+
+### Layout
 
 ```
 Sources/iAgent/
@@ -317,8 +367,33 @@ iAgent.entitlements        hardened-runtime entitlements (Apple Events, Calendar
 scripts/build-release.sh   signed release build
 SECURITY.md                threat model, controls, standards mapping, residual risks
 AGENTS.md                  architecture and conventions for contributors and coding agents
+LICENSE                    Apache License 2.0
 ```
 
-Run the tests with `swift test < /dev/null`. Redirecting stdin makes the session non-interactive, which enables the tests that check approvals are refused without a terminal.
-
 Adding a tool means adding one `Tool(...)` to `Toolbox` (or `AppleTools.all`). It works with both providers.
+
+## Contributing
+
+Contributions are welcome: bug reports, fixes, new tools and documentation.
+
+1. Fork the repository and create a branch from `main`.
+2. Read [AGENTS.md](AGENTS.md) for the architecture, conventions and hard constraints, and [SECURITY.md](SECURITY.md)
+   before touching permission, path, process or network code.
+3. Keep the project free of third-party dependencies (Apple frameworks only).
+4. Add or update tests. A security change must keep `SecurityTests.swift` green and add a regression test.
+5. Run `swift build` and `swift test < /dev/null`, then open a pull request that explains what changed and why.
+
+Please never commit credentials, API keys or personal data, including in test fixtures (use obviously fake values) and
+screenshots (use a staged demo).
+
+By submitting a contribution, you agree that it is licensed under the Apache License 2.0, as described in section 5
+of the license.
+
+## Security
+
+iAgent's threat model, controls and residual risks are documented in [SECURITY.md](SECURITY.md). Please report
+vulnerabilities privately as described there, not in a public issue.
+
+## License
+
+iAgent is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.

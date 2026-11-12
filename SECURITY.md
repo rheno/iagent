@@ -122,7 +122,7 @@ In this mode, no data leaves the machine:
 
 ## Reporting a vulnerability
 
-Please report privately to the maintainer rather than opening a public issue. Include steps to reproduce. We aim to acknowledge reports within 3 working days.
+Please report privately rather than opening a public issue: on GitHub, open the repository's **Security** tab and choose **Report a vulnerability** (private vulnerability reporting). Include steps to reproduce. We aim to acknowledge reports within 3 working days.
 
 ## How it was verified
 
