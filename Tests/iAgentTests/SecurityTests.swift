@@ -538,6 +538,21 @@ func isBlocked(_ a: Approval) -> Bool {
 // MARK: - Secrets never reach the model (OWASP LLM02)
 
 @Suite struct RedactionTests {
+    /// Long unbroken runs (base64, minified JS) made the key=value pattern backtrack quadratically: 8k chars took ~10s.
+    @Test(arguments: ["x", "a.", "auth", "http"])
+    func longLinesAreMaskedQuickly(_ unit: String) {
+        let line = String(repeating: unit, count: 200_000 / unit.count)
+        let start = Date()
+        let (_, n) = Redact.secrets(line)
+        #expect(n == 0 && Date().timeIntervalSince(start) < 2)
+    }
+
+    @Test func keyValueSecretsStillMaskedWithoutTheNamePrefix() {
+        let (out, n) = Redact.secrets("MY_API_KEY=abc123def456 and DB_PASSWORD: 'hunter2hunter2' and url https://u:pa55word1@host/x")
+        #expect(n == 3 && !out.contains("abc123def456") && !out.contains("hunter2hunter2") && !out.contains("pa55word1"))
+        #expect(out.contains("MY_API_KEY=") && out.contains("DB_PASSWORD"))
+    }
+
     @Test(arguments: [
         "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123",
         "sk-proj-abcdefghijklmnopqrstuvwxyz0123",
