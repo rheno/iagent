@@ -81,7 +81,7 @@ In this mode, no data leaves the machine:
 ### Resource limits (OWASP LLM10, CWE-400/770)
 
 - `read_file` is limited to 20 MB, `web_fetch` downloads to 5 MB, and command output to 10 MB.
-- Tool results sent to the model are cut at 30k characters.
+- Tool results and tool error messages sent to the model are cut at 30k characters.
 - Commands time out after 120 s by default (600 s max). A timeout or Ctrl-C sends SIGTERM to the command's whole process group, then SIGKILL after 2 s. A background child (`server &`) that keeps the output pipe open doesn't hold up the result and keeps running: its later output is read and discarded, and input for a command that never reads it can't block past the timeout.
 - A model stream that ends early (a dropped connection) is reported as an error, so a cut-off reply or tool call is never treated as finished: Anthropic streams need their stop reason or `message_stop`, OpenAI-compatible streams `[DONE]` or a `finish_reason`.
 - Ctrl-C stops `grep` and `glob` between files (and `grep` between lines), not only commands.
