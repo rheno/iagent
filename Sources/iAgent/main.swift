@@ -111,21 +111,7 @@ do {
 
     try config.loadFile()
     config.loadEnv()
-    if cliSet.contains("provider") {
-        // Switching provider on the CLI shouldn't inherit another provider's URL/model/key settings.
-        config.provider = flags.provider
-        config.baseURL = nil; config.model = nil; config.apiKey = nil; config.apiKeyEnv = nil; config.kind = nil
-    }
-    if cliSet.contains("model") { config.model = flags.model }
-    if cliSet.contains("baseURL") { config.baseURL = flags.baseURL }
-    if cliSet.contains("kind") { config.kind = flags.kind }
-    if cliSet.contains("apiKeyEnv") { config.apiKeyEnv = flags.apiKeyEnv; config.apiKey = nil }
-    if cliSet.contains("maxTokens") { config.maxTokens = flags.maxTokens }
-    if cliSet.contains("effort") { config.effort = flags.effort }
-    if cliSet.contains("thinking") { config.thinking = false }
-    if cliSet.contains("appleTools") { config.appleTools = false }
-    if cliSet.contains("localOnly") { config.localOnly = true }
-    config.autoApprove = flags.autoApprove
+    config.applyFlags(flags, set: cliSet)
 } catch {
     emitError("error: \(error)")
     exit(2)

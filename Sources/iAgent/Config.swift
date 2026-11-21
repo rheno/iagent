@@ -95,6 +95,30 @@ struct Config {
         if let h = v["headers"] as? [String: String] { headers.merge(h) { _, new in new } }
     }
 
+    /// Applies the CLI flags named in `set` on top of the file and env layers. A provider or key source chosen on the
+    /// CLI drops every credential setting of the lower layers (Keychain item, custom headers), so one provider's key
+    /// or gateway token is never sent to another (CWE-522).
+    mutating func applyFlags(_ flags: Config, set: Set<String>) {
+        if set.contains("provider") {
+            provider = flags.provider
+            baseURL = nil; model = nil; kind = nil
+            apiKey = nil; apiKeyEnv = nil; apiKeyKeychain = nil; apiKeyKeychainAccount = nil; headers = [:]
+        }
+        if set.contains("model") { model = flags.model }
+        if set.contains("baseURL") { baseURL = flags.baseURL }
+        if set.contains("kind") { kind = flags.kind }
+        if set.contains("apiKeyEnv") {
+            apiKeyEnv = flags.apiKeyEnv
+            apiKey = nil; apiKeyKeychain = nil; apiKeyKeychainAccount = nil
+        }
+        if set.contains("maxTokens") { maxTokens = flags.maxTokens }
+        if set.contains("effort") { effort = flags.effort }
+        if set.contains("thinking") { thinking = false }
+        if set.contains("appleTools") { appleTools = false }
+        if set.contains("localOnly") { localOnly = true }
+        autoApprove = flags.autoApprove
+    }
+
     mutating func loadEnv() {
         let env = ProcessInfo.processInfo.environment
         if let s = env["IAGENT_PROVIDER"] { provider = s }

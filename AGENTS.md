@@ -74,7 +74,8 @@ Sources/iAgent/
 ## How it works
 
 1. `main.swift` parses flags, then merges config: `Config.loadFile()` → `loadEnv()` → CLI flags (`cliSet`).
-   Passing `--provider` on the CLI resets base URL/model/key from lower layers.
+   Passing `--provider` on the CLI resets base URL/model/key, Keychain item and headers from lower layers
+   (`Config.applyFlags`).
 2. `Config.providerName` picks the preset: API key env vars, else `fm` if installed (and no other `-m`), else Ollama;
    `--local` skips the keys. `main.swift` starts `fm serve` via `AppleFM.ensureServer` when `managesFMServer`, and
    with `fm` there are no tools and `Agent.buildChatPrompt` replaces the agent prompt (`fm serve` can't call tools). `Config.makeProvider()` resolves preset/kind/base URL, enforces the HTTPS rule, finds the key
