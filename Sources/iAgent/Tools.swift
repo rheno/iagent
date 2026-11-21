@@ -276,7 +276,8 @@ enum Toolbox {
         } catch {
             let msg = "Error: \((error as? AgentError)?.message ?? error.localizedDescription)"
             emit(Style.red("  ⎿  \(Sanitize.terminal(String(msg.prefix(300))))\n"))
-            return (redacted(msg), true)
+            // Errors can carry a command's whole output (runChecked, osascript): same 30k limit as results.
+            return (truncate(redacted(msg)), true)
         }
     }
 

@@ -484,6 +484,15 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(truncate("short") == "short")
     }
 
+    @Test func toolErrorsAreTruncated() async throws {
+        // A failing command's error carries its whole output (up to OutputBuffer.cap); it must be cut like a result.
+        let failing = Tool(name: "noisy", description: "", schema: schema([:], required: []), approval: { _, _ in .none },
+                           summary: { _ in "" }, run: { _, _ in throw AgentError(String(repeating: "x", count: 100_000)) })
+        let box = try Sandbox()
+        let (out, isError) = await Toolbox.execute(ToolCall(id: "1", name: "noisy", arguments: "{}"), tools: [failing], ctx: box.ctx)
+        #expect(isError && out.count < 31_000 && out.hasSuffix("characters]"))
+    }
+
     @Test func commandsTimeOut() async throws {
         let r = try await runCommand(["sleep", "5"], timeout: 0.3)
         #expect(r.note.contains("timed out"))
