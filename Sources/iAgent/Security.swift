@@ -234,10 +234,13 @@ enum Redact {
     ].map { try! NSRegularExpression(pattern: $0) }
 
     /// Credentials whose surroundings identify them; only the value (last capture group) is masked.
+    /// Repeats are possessive (`*+`) where the next character can't be part of them: a greedy `[A-Za-z0-9_.-]*` that
+    /// must then find `=` backtracks at every position, so a long base64 or minified line took minutes (CWE-1333).
+    /// For the same reason a URL scheme starts only after a non-scheme character, not at every `\b` in `a.a.a…`.
     private static let values: [NSRegularExpression] = [
         "(?i)\\b(bearer|basic)\\s+([A-Za-z0-9._~+/=-]{16,})",
-        "(?i)\\b[a-z][a-z0-9+.-]*://[^\\s:/@]+:([^\\s@/]+)@",
-        "(?i)[A-Za-z0-9_.-]*(api[_-]?key|secret|token|passw(or)?d|pwd|credential|private[_-]?key|auth)[A-Za-z0-9_.-]*[\"']?\\s*[:=]\\s*[\"']?([^\\s\"'`,;()<>{}\\[\\]]{8,})",
+        "(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*+://[^\\s:/@]++:([^\\s@/]++)@",
+        "(?i)(api[_-]?key|secret|token|passw(or)?d|pwd|credential|private[_-]?key|auth)[A-Za-z0-9_.-]*+[\"']?\\s*+[:=]\\s*+[\"']?([^\\s\"'`,;()<>{}\\[\\]]{8,})",
     ].map { try! NSRegularExpression(pattern: $0) }
 
     /// Masks secrets in text bound for the model provider. Returns the text and how many secrets were masked.
