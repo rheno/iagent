@@ -281,6 +281,33 @@ func isBlocked(_ a: Approval) -> Bool {
         #expect(try warnings(#"{"profiles": {"gw": {"headers": {"X-Api-Key": "x"}}}}"#, mode: 0o644).first?.contains("X-Api-Key") == true)
     }
 
+    /// A config set up for one provider: key in the Keychain, gateway token in a header.
+    private func gatewayConfig() -> Config {
+        var c = Config()
+        c.apply(["provider": "openrouter", "apiKeyKeychain": "openrouter-key", "apiKeyKeychainAccount": "me",
+                 "headers": ["Authorization": "Bearer gateway-token"]])
+        return c
+    }
+
+    @Test func cliProviderDropsTheConfigsCredentials() {
+        var c = gatewayConfig()
+        var flags = Config()
+        flags.provider = "anthropic"
+        c.applyFlags(flags, set: ["provider"])
+        #expect(c.provider == "anthropic")
+        #expect(c.apiKeyKeychain == nil && c.apiKeyKeychainAccount == nil && c.apiKey == nil)
+        #expect(c.headers.isEmpty)
+    }
+
+    @Test func cliKeyEnvBeatsTheConfigsKeychainItem() {
+        var c = gatewayConfig()
+        var flags = Config()
+        flags.apiKeyEnv = "MY_KEY"
+        c.applyFlags(flags, set: ["apiKeyEnv"])
+        #expect(c.apiKeyEnv == "MY_KEY" && c.apiKeyKeychain == nil && c.apiKey == nil)
+        #expect(c.provider == "openrouter")   // other settings stay
+    }
+
     @Test func privateConfigOrHarmlessHeadersDontWarn() throws {
         #expect(try warnings(#"{"headers": {"Authorization": "Bearer x"}}"#, mode: 0o600).isEmpty)
         #expect(try warnings(#"{"headers": {"X-Title": "iagent"}}"#, mode: 0o644).isEmpty)
